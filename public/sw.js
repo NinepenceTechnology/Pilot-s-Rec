@@ -62,3 +62,11 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+// --- Forçar atualização imediata após nova compilação ---
+self.addEventListener("install", (event) => {
+  self.skipWaiting(); // ativa logo após instalação
+});
+
+self.addEventListener("activate", (event) => {
+  self.clients.claim(); // assume controlo de todas as páginas abertas
+});

@@ -17,3 +17,15 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => {
+        console.log("Service Worker registado:", registration);
+      })
+      .catch((error) => {
+        console.error("Erro ao registar Service Worker:", error);
+      });
+  });
+}

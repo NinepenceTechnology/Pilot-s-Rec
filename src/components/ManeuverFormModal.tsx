@@ -384,7 +384,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
         maneuverDurationFormatted: maneuverDuration || pilotDuty.formatted,
         unmooringTime: lastLineTime,
         berthingTime: berthingTime,
-        berthingModel: berthingModel,
+        berthingModel: maneuverType === 'desatracacao' ? undefined : berthingModel,
         tugCount: tugsCount,
         tugTimings: {
           arranque: tugArranque,
@@ -538,7 +538,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
       maneuverDurationFormatted: maneuverDuration || pilotDuty.formatted,
       unmooringTime: lastLineTime,
       berthingTime: berthingTime,
-      berthingModel: berthingModel,
+      berthingModel: maneuverType === 'desatracacao' ? undefined : berthingModel,
       tugCount: tugsCount,
       tugTimings: {
         arranque: tugArranque,
@@ -956,7 +956,9 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
               <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-blue-700" />
-                2. {language === 'pt' ? 'HORÁRIOS OPERACIONAIS & MODELO DE ATRACAÇÃO' : 'OPERATIONAL MILESTONES & BERTHING MODEL'}
+                2. {language === 'pt' 
+                  ? (maneuverType === 'desatracacao' ? 'HORÁRIOS OPERACIONAIS DA DESATRACAÇÃO' : 'HORÁRIOS OPERACIONAIS & MODELO DE ATRACAÇÃO') 
+                  : (maneuverType === 'desatracacao' ? 'OPERATIONAL MILESTONES (UNBERTHING)' : 'OPERATIONAL MILESTONES & BERTHING MODEL')}
               </h3>
               <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded border border-slate-300 self-start sm:self-auto">
                 {language === 'pt' ? 'Campos dinâmicos para:' : 'Fields configured for:'} <strong className="text-blue-900">{maneuverType.toUpperCase()}</strong>
@@ -1177,35 +1179,41 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               </div>
             </div>
 
-            {/* MODELO DE ATRACAÇÃO, BERÇO & PRÁTICO RESPONSÁVEL */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
-              <div>
-                <label className="block text-xs font-bold uppercase text-black mb-1">
-                  {language === 'pt' ? 'MODELO DE ATRACAÇÃO *' : 'BERTHING MODEL *'}
-                </label>
-                <select
-                  value={berthingModel}
-                  onChange={(e) => setBerthingModel(e.target.value as BerthingModel)}
-                  className="w-full bg-white border-2 border-black rounded px-3 py-2 text-sm font-bold text-black"
-                >
-                  <option value="Costado Bombordo (BB)">{language === 'pt' ? 'Costado de Bombordo (BB)' : 'Port Side (BB)'}</option>
-                  <option value="Costado Boreste (BE)">{language === 'pt' ? 'Costado de Boreste (BE)' : 'Starboard Side (BE)'}</option>
-                  <option value="Mediterrânea (Popa)">{language === 'pt' ? 'Mediterrânea (Popa ao Cais)' : 'Mediterranean (Stern-to)'}</option>
-                  <option value="Amarras / Bóias">{language === 'pt' ? 'Amarras / Bóias de Amarração' : 'Buoy / Mooring Lines'}</option>
-                  <option value="Dolphin / Terminal">{language === 'pt' ? 'Dolphin / Terminal Flutuante' : 'Dolphin / Offshore'}</option>
-                </select>
-              </div>
+            {/* BERÇO & PRÁTICO RESPONSÁVEL (MODELO DE ATRACAÇÃO APENAS PARA ATRACAÇÃO / MUDANÇA / PUXANÇA) */}
+            <div className={`grid grid-cols-1 ${maneuverType === 'desatracacao' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'} gap-3 pt-2 border-t border-slate-100`}>
+              {maneuverType !== 'desatracacao' && (
+                <div>
+                  <label className="block text-xs font-bold uppercase text-black mb-1">
+                    {language === 'pt' ? 'MODELO DE ATRACAÇÃO *' : 'BERTHING MODEL *'}
+                  </label>
+                  <select
+                    value={berthingModel}
+                    onChange={(e) => setBerthingModel(e.target.value as BerthingModel)}
+                    className="w-full bg-white border-2 border-black rounded px-3 py-2 text-sm font-bold text-black"
+                  >
+                    <option value="Costado Bombordo (BB)">{language === 'pt' ? 'Costado de Bombordo (BB)' : 'Port Side (BB)'}</option>
+                    <option value="Costado Boreste (BE)">{language === 'pt' ? 'Costado de Boreste (BE)' : 'Starboard Side (BE)'}</option>
+                    <option value="Mediterrânea (Popa)">{language === 'pt' ? 'Mediterrânea (Popa ao Cais)' : 'Mediterranean (Stern-to)'}</option>
+                    <option value="Amarras / Bóias">{language === 'pt' ? 'Amarras / Bóias de Amarração' : 'Buoy / Mooring Lines'}</option>
+                    <option value="Dolphin / Terminal">{language === 'pt' ? 'Dolphin / Terminal Flutuante' : 'Dolphin / Offshore'}</option>
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  {language === 'pt' ? 'BERÇO / CAIS DESTINADO' : 'ASSIGNED BERTH / QUAY'}
+                  {maneuverType === 'desatracacao'
+                    ? (language === 'pt' ? 'BERÇO / CAIS DE SAÍDA (DESATRACADO)' : 'DEPARTURE BERTH / QUAY')
+                    : (language === 'pt' ? 'BERÇO / CAIS DESTINADO' : 'ASSIGNED BERTH / QUAY')}
                 </label>
                 <input
                   type="text"
                   value={berthTo}
                   onChange={(e) => setBerthTo(e.target.value)}
-                  placeholder={language === 'pt' ? 'Ex: Berço 101 ou Cais Norte' : 'e.g. Berth 101 or North Quay'}
-                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                  placeholder={maneuverType === 'desatracacao'
+                    ? (language === 'pt' ? 'Ex: Berço 101 ou Cais Norte' : 'e.g. Berth 101 or North Quay')
+                    : (language === 'pt' ? 'Ex: Berço 101 ou Cais Norte' : 'e.g. Berth 101 or North Quay')}
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black placeholder:text-slate-400"
                 />
               </div>
 
