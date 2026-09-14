@@ -1,0 +1,1130 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Anchor, 
+  X, 
+  Ship, 
+  Clock, 
+  Check, 
+  Camera, 
+  Upload, 
+  FileText, 
+  Download, 
+  Wifi, 
+  WifiOff, 
+  Globe, 
+  Search,
+  Compass,
+  Layers,
+  Sparkles,
+  AlertCircle,
+  Calendar
+} from 'lucide-react';
+import { useMaritime } from '../context/MaritimeContext';
+import { 
+  ManeuverType, 
+  BerthingModel, 
+  Vessel, 
+  VesselType, 
+  TugAssistance,
+  ManeuverRecord
+} from '../types/maritime';
+import { 
+  searchVesselsWithSuggestions, 
+  VesselSearchResult 
+} from '../utils/vesselDatabase';
+import { generatePilotageManeuverPDF } from '../utils/pdfGenerator';
+
+interface ManeuverFormModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  initialVessel?: Vessel | null;
+  editManeuver?: ManeuverRecord | null;
+}
+
+export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  initialVessel,
+  editManeuver
+}) => {
+  const { vessels, maneuvers, pilots, addManeuver, updateManeuver, addVessel, addPilot, weather, currentUser, language } = useMaritime();
+
+  if (!isOpen) return null;
+
+  // Online status detection
+  const [isOnline, setIsOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Form states - Exactly requested by user:
+  // 1. NOME DO NAVIO, LOA, BEAM, CALADO, PROCEDENCIA, PROXIMO PORTO
+  const [shipName, setShipName] = useState<string>(editManeuver?.vesselSnapshot.name || initialVessel?.name || '');
+  const [imoNumber, setImoNumber] = useState<string>(editManeuver?.vesselSnapshot.imo || initialVessel?.imo || '');
+  const [nationality, setNationality] = useState<string>(editManeuver?.vesselSnapshot.flag || initialVessel?.flag || '');
+  const [vesselType, setVesselType] = useState<VesselType>(editManeuver?.vesselSnapshot.type || initialVessel?.type || 'porta_conteiner');
+  const [loa, setLoa] = useState<number>(editManeuver?.vesselSnapshot.loa || initialVessel?.loa || 0);
+  const [beam, setBeam] = useState<number>(editManeuver?.vesselSnapshot.beam || initialVessel?.beam || 0);
+  const [grt, setGrt] = useState<number>(editManeuver?.vesselSnapshot.grossTonnage || initialVessel?.grossTonnage || 0);
+  const [draftFwd, setDraftFwd] = useState<number>(editManeuver?.vesselSnapshot.draftFwd || initialVessel?.currentDraftFwd || 0);
+  const [draftAft, setDraftAft] = useState<number>(editManeuver?.vesselSnapshot.draftAft || initialVessel?.currentDraftAft || 0);
+  const [origin, setOrigin] = useState<string>(editManeuver?.vesselSnapshot.origin || initialVessel?.origin || '');
+  const [nextPort, setNextPort] = useState<string>(editManeuver?.vesselSnapshot.destination || initialVessel?.destination || '');
+
+  // 2. PRIMEIRO CABO, DESATRACAÇÃO, ATRACAÇÃO, MODELO DE ATRACAÇÃO
+  const [firstLineTime, setFirstLineTime] = useState<string>(editManeuver?.firstLineAshored || editManeuver?.milestones?.firstLineAshored || '');
+  const [unmooringTime, setUnmooringTime] = useState<string>(editManeuver?.unmooringTime || editManeuver?.milestones?.commenceManeuver || '');
+  const [berthingTime, setBerthingTime] = useState<string>(editManeuver?.berthingTime || editManeuver?.milestones?.allFastCompleted || '');
+  const [berthingModel, setBerthingModel] = useState<BerthingModel>(editManeuver?.berthingModel || 'Costado Bombordo (BB)');
+
+  // 3. NÚMERO DE REBOCADORES, TEMPO DE ASSISTÊNCIA DE REBOCADORES (ARRANQUE, INICIO, FIM)
+  const [tugsCount, setTugsCount] = useState<number>(editManeuver?.tugCount ?? editManeuver?.tugs.length ?? 0);
+  const [tugArranque, setTugArranque] = useState<string>(editManeuver?.tugTimings?.arranque || '');
+  const [tugInicio, setTugInicio] = useState<string>(editManeuver?.tugTimings?.inicio || '');
+  const [tugFim, setTugFim] = useState<string>(editManeuver?.tugTimings?.fim || '');
+
+  // 4. TEMPO DE MANOBRAS (Calculado ou manual)
+  const [maneuverDuration, setManeuverDuration] = useState<string>(editManeuver?.maneuverDurationFormatted || (editManeuver?.durationMinutes ? `${editManeuver.durationMinutes} min` : ''));
+
+  // 5. TIPO DE MANOBRAS: ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO
+  const [maneuverType, setManeuverType] = useState<ManeuverType>(editManeuver?.maneuverType || 'atracacao');
+
+  // 6. OBSERVAÇÃO
+  const [remarks, setRemarks] = useState<string>(editManeuver?.pilotRemarks || '');
+
+  // Piloto responsável e berço
+  const [pilotId, setPilotId] = useState<string>(() => {
+    if (editManeuver?.pilotId) return editManeuver.pilotId;
+    if (currentUser?.id) return currentUser.id;
+    return pilots[0]?.id || '';
+  });
+  const [customPilotName, setCustomPilotName] = useState<string>(editManeuver?.pilotName || currentUser?.name || '');
+  const [berthTo, setBerthTo] = useState<string>(editManeuver?.berthTo || '');
+
+  // 7. ESPAÇO PARA FOTO QUE AUTOMATICAMENTE VIRA PDF ANEXADO AOS REGISTOS
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(editManeuver?.photoUrl || null);
+  const [photoFileName, setPhotoFileName] = useState<string>(editManeuver?.photoTitle || '');
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+  const [generatedPdfUrl, setGeneratedPdfUrl] = useState<string | null>(null);
+
+  // Suggestions & Auto-fetching states
+  const [isSearchingOnline, setIsSearchingOnline] = useState<boolean>(false);
+  const [suggestions, setSuggestions] = useState<VesselSearchResult[]>([]);
+  const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
+  const [dataSourceNotification, setDataSourceNotification] = useState<{
+    source: 'local' | 'online';
+    message: string;
+  } | null>(null);
+
+  const searchAbortControllerRef = useRef<AbortController | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-calculate maneuver duration if unmooring & berthing times are provided
+  useEffect(() => {
+    if (unmooringTime && berthingTime) {
+      const [h1, m1] = unmooringTime.split(':').map(Number);
+      const [h2, m2] = berthingTime.split(':').map(Number);
+      if (!isNaN(h1) && !isNaN(m1) && !isNaN(h2) && !isNaN(m2)) {
+        let diffMinutes = (h2 * 60 + m2) - (h1 * 60 + m1);
+        if (diffMinutes < 0) diffMinutes += 24 * 60; // Next day wrap
+        const hrs = Math.floor(diffMinutes / 60);
+        const mins = diffMinutes % 60;
+        setManeuverDuration(`${hrs > 0 ? `${hrs}h ` : ''}${mins}m (${diffMinutes} min)`);
+      }
+    }
+  }, [unmooringTime, berthingTime]);
+
+  // Handle Ship Name typing with MarineTraffic, VesselFinder and Internal Backup Suggestions
+  const handleShipNameChange = (query: string) => {
+    setShipName(query);
+    setDataSourceNotification(null);
+
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      setIsDropdownOpen(false);
+      return;
+    }
+
+    const matches = searchVesselsWithSuggestions(query, vessels, maneuvers);
+    setSuggestions(matches);
+    setIsDropdownOpen(matches.length > 0);
+  };
+
+  // When a vessel is selected from suggestions or auto-fetched
+  const applyVesselData = (result: VesselSearchResult) => {
+    const v = result.vessel;
+    setShipName(v.name);
+    setImoNumber(v.imo);
+    setNationality(v.flag);
+    setVesselType(v.type);
+    setLoa(v.loa);
+    setBeam(v.beam);
+    setGrt(v.grossTonnage);
+    setDraftFwd(v.currentDraftFwd);
+    setDraftAft(v.currentDraftAft);
+    setOrigin(v.origin);
+    setNextPort(v.destination);
+
+    setIsDropdownOpen(false);
+
+    setDataSourceNotification({
+      source: result.source === 'backup_interno' ? 'local' : 'online',
+      message: `${result.sourceLabel}: ${v.name} (${v.flag} · LOA ${v.loa}m · Boca ${v.beam}m · Calados Vte ${v.currentDraftFwd}m / Ré ${v.currentDraftAft}m · GRT ${v.grossTonnage.toLocaleString()})`
+    });
+  };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Handle Photo Upload (Convert into base64 & prepare automatic PDF attachment)
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setPhotoFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (uploadEvent) => {
+      const base64Data = uploadEvent.target?.result as string;
+      setPhotoDataUrl(base64Data);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Quick Action: Generate and download the official PDF directly from the form with the attached photo
+  const handleQuickDownloadPdf = async () => {
+    setIsGeneratingPdf(true);
+    try {
+      const selectedPilot = pilots.find(p => p.id === pilotId) || pilots[0];
+      const pilotDisplayName = selectedPilot?.name || customPilotName.trim() || 'Prático em Serviço';
+      const tempRecord = {
+        id: `PREVIEW-${Date.now().toString().slice(-4)}`,
+        vesselId: 'preview-vessel',
+        vesselSnapshot: {
+          name: shipName.toUpperCase().trim() || 'NAVIO SEM NOME',
+          imo: imoNumber || 'IMO 9000000',
+          flag: nationality || 'Internacional',
+          type: vesselType,
+          loa: loa,
+          beam: beam,
+          draftFwd: draftFwd,
+          draftAft: draftAft,
+          grossTonnage: grt,
+          agent: 'Agência Marítima Oficial',
+          origin: origin || 'Porto de Origem',
+          destination: nextPort || 'Próximo Porto'
+        },
+        maneuverType: maneuverType,
+        status: 'concluida' as const,
+        scheduledTime: new Date().toISOString(),
+        berthFrom: origin || 'Fundeio',
+        berthTo: berthTo || 'Cais de Atracação',
+        pilotId: selectedPilot?.id || 'plt-01',
+        pilotName: pilotDisplayName,
+        milestones: {
+          commenceManeuver: unmooringTime,
+          firstLineAshored: firstLineTime,
+          allFastCompleted: berthingTime
+        },
+        durationMinutes: 80,
+        maneuverDurationFormatted: maneuverDuration,
+        firstLineAshored: firstLineTime,
+        unmooringTime: unmooringTime,
+        berthingTime: berthingTime,
+        berthingModel: berthingModel,
+        tugCount: tugsCount,
+        tugTimings: {
+          arranque: tugArranque,
+          inicio: tugInicio,
+          fim: tugFim
+        },
+        tugs: [],
+        weather: weather,
+        safetyChecklist: {
+          pilotLadderCompliant: true,
+          steeringGearTested: true,
+          bowThrusterOperational: true,
+          mainEngineTested: true,
+          anchorsCleared: true,
+          radarEcdisOperational: true,
+          vhfChannelsConfirmed: true,
+          masterPilotExchangeDone: true,
+          deckCrewAssisting: true
+        },
+        pilotRemarks: remarks,
+        photoUrl: photoDataUrl || undefined,
+        photoTitle: photoFileName || 'Foto oficial da manobra e cabos de atracação',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      const result = await generatePilotageManeuverPDF(tempRecord, { downloadImmediately: true });
+      setGeneratedPdfUrl(result.pdfUrl);
+    } catch (err) {
+      console.error('Erro ao gerar PDF:', err);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  // Submit complete maneuver record
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!shipName.trim()) {
+      alert('Por favor, informe o Nome do Navio.');
+      return;
+    }
+
+    const selectedPilot = pilots.find(p => p.id === pilotId) || (currentUser && (pilotId === currentUser.id || !pilotId) ? { id: currentUser.id, name: currentUser.name } : pilots[0]);
+    let finalPilotId = selectedPilot?.id || currentUser?.id;
+    let finalPilotName = selectedPilot?.name || currentUser?.name;
+
+    if (!finalPilotId || !finalPilotName) {
+      finalPilotName = customPilotName.trim() || 'Prático Responsável';
+      finalPilotId = addPilot({
+        name: finalPilotName,
+        licenseNumber: `CIR-${Date.now().toString().slice(-4)}`,
+        category: 'Prático Efetivo',
+        phone: '+351 900 000 000',
+        vhfCallSign: `Prático ${finalPilotName.split(' ')[1] || 'Manobra'}`,
+        status: 'em_manobra',
+        currentShift: 'Manhã/Tarde (08h-16h)',
+        avatarColor: 'bg-blue-900'
+      });
+    }
+
+    // Ensure vessel is in system
+    let vesselId = '';
+    const existingVessel = vessels.find(
+      v => v.name.toLowerCase() === shipName.toLowerCase() || (imoNumber && v.imo === imoNumber)
+    );
+
+    if (existingVessel) {
+      vesselId = existingVessel.id;
+    } else {
+      vesselId = addVessel({
+        name: shipName.toUpperCase().trim(),
+        imo: imoNumber || `9${Math.floor(100000 + Math.random() * 900000)}`,
+        callSign: 'PPXZ',
+        flag: nationality || 'Internacional',
+        flagCode: 'UN',
+        type: vesselType,
+        loa: Number(loa),
+        beam: Number(beam),
+        maxDraft: Math.max(Number(draftFwd), Number(draftAft)) + 1.5,
+        currentDraftFwd: Number(draftFwd),
+        currentDraftAft: Number(draftAft),
+        agent: 'Agência Marítima do Porto',
+        origin: origin,
+        destination: nextPort,
+        dwt: Math.round(grt * 1.15),
+        grossTonnage: Number(grt)
+      });
+    }
+
+    const tugsData: TugAssistance[] = [];
+    for (let i = 1; i <= tugsCount; i++) {
+      tugsData.push({
+        tugId: `tug-${i}`,
+        tugName: `REBOCADOR DE ASSISTÊNCIA ${i}`,
+        bollardPullTons: 70,
+        hoursAssisted: 1.5,
+        position: i === 1 ? 'proa' : i === 2 ? 'popa' : 'costado_bb',
+        timings: {
+          arranque: tugArranque,
+          inicio: tugInicio,
+          fim: tugFim
+        }
+      });
+    }
+
+    const maneuverPayload = {
+      vesselId: vesselId,
+      vesselSnapshot: {
+        name: shipName.toUpperCase().trim(),
+        imo: imoNumber || 'IMO 9000000',
+        flag: nationality || 'Internacional',
+        type: vesselType,
+        loa: Number(loa),
+        beam: Number(beam),
+        draftFwd: Number(draftFwd),
+        draftAft: Number(draftAft),
+        grossTonnage: Number(grt),
+        agent: 'Agência Marítima Oficial',
+        origin: origin,
+        destination: nextPort
+      },
+      maneuverType: maneuverType,
+      berthFrom: origin || 'Fundeio',
+      berthTo: berthTo || 'Cais de Atracação',
+      pilotId: finalPilotId,
+      pilotName: finalPilotName,
+      milestones: {
+        ...(editManeuver?.milestones || {}),
+        commenceManeuver: unmooringTime || editManeuver?.milestones?.commenceManeuver,
+        firstLineAshored: firstLineTime || editManeuver?.milestones?.firstLineAshored,
+        allFastCompleted: berthingTime || editManeuver?.milestones?.allFastCompleted
+      },
+      maneuverDurationFormatted: maneuverDuration,
+      firstLineAshored: firstLineTime,
+      unmooringTime: unmooringTime,
+      berthingTime: berthingTime,
+      berthingModel: berthingModel,
+      tugCount: tugsCount,
+      tugTimings: {
+        arranque: tugArranque,
+        inicio: tugInicio,
+        fim: tugFim
+      },
+      tugs: tugsData,
+      pilotRemarks: remarks,
+      photoUrl: photoDataUrl || undefined,
+      photoTitle: photoFileName || 'Registo Fotográfico da Manobra'
+    };
+
+    if (editManeuver) {
+      updateManeuver(editManeuver.id, maneuverPayload);
+    } else {
+      addManeuver({
+        ...maneuverPayload,
+        status: 'concluida',
+        scheduledTime: new Date().toISOString(),
+        durationMinutes: 80,
+        weather: weather,
+        safetyChecklist: {
+          pilotLadderCompliant: true,
+          steeringGearTested: true,
+          bowThrusterOperational: true,
+          mainEngineTested: true,
+          anchorsCleared: true,
+          radarEcdisOperational: true,
+          vhfChannelsConfirmed: true,
+          masterPilotExchangeDone: true,
+          deckCrewAssisting: true
+        },
+        pilotageCertificateSigned: true
+      });
+    }
+
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto transition-opacity duration-200">
+      {/* Container in White, Deep Naval Blue and Black */}
+      <div className="bg-white border-2 border-black rounded-xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col my-auto max-h-[94vh] animate-in fade-in zoom-in-95 duration-200">
+        
+        {/* Top Header - Deep Blue with White & Black Accents */}
+        <div className="bg-blue-900 text-white px-5 py-4 border-b-2 border-black flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-black border border-blue-400 flex items-center justify-center text-white font-black shadow-inner">
+              <Anchor className="w-5 h-5 text-blue-300" />
+            </div>
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                {editManeuver ? `EDITAR MANOBRA: ${editManeuver.id}` : (language === 'pt' ? 'REGISTO DE MANOBRA DO PILOTO' : 'PILOT MANEUVER LOG')}
+                <span className="text-xs bg-black text-blue-300 px-2 py-0.5 rounded border border-blue-800 font-mono">
+                  {editManeuver ? (language === 'pt' ? 'EDIÇÃO' : 'EDIT') : (language === 'pt' ? 'SISTEMA OFICIAL' : 'OFFICIAL')}
+                </span>
+              </h2>
+              <p className="text-xs text-blue-200">
+                {editManeuver 
+                  ? (language === 'pt' ? 'Atualização de dados de bordo, rebocadores, tempos e observações técnicas.' : 'Updating on-board telemetry, tugs, timeline and pilot remarks.')
+                  : (language === 'pt' ? 'Preenchimento direto de dados de bordo, rebocadores, cabos e anexo fotográfico em PDF.' : 'Vessel data entry, tug telemetry, mooring cables and PDF report.')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Online / Offline badge */}
+            <div 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                isOnline 
+                  ? 'bg-blue-950/80 text-blue-200 border-blue-400' 
+                  : 'bg-black text-slate-300 border-slate-700'
+              }`}
+              title={isOnline ? 'Conectado: Busca automática ativa pela internet' : 'Sem conexão: Usando base local'}
+            >
+              {isOnline ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  <Globe className="w-3.5 h-3.5 text-blue-300" />
+                  <span className="hidden sm:inline">Online (Busca Automática)</span>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Modo Local</span>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg bg-black hover:bg-slate-800 text-white flex items-center justify-center transition-colors border border-blue-400"
+              title="Fechar formulário"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSubmit} className="p-5 sm:p-6 overflow-y-auto space-y-6 text-slate-900">
+          
+          {/* SELEÇÃO DO TIPO DE MANOBRA (4 opções exatas requeridas pelo usuário) */}
+          <div className="bg-slate-50 border-2 border-slate-300 rounded-lg p-3 sm:p-4">
+            <label className="block text-xs font-bold uppercase tracking-wider text-blue-900 mb-2">
+              TIPO DE MANOBRA *
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { id: 'atracacao', label: 'ATRACAÇÃO' },
+                { id: 'mudanca', label: 'MUDANÇA' },
+                { id: 'puxanca', label: 'PUXANÇA' },
+                { id: 'desatracacao', label: 'DESATRACAÇÃO' }
+              ].map(opt => {
+                const isSelected = maneuverType === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setManeuverType(opt.id as ManeuverType)}
+                    className={`py-2.5 px-3 rounded-md font-bold text-xs sm:text-sm tracking-wide border-2 transition-all flex items-center justify-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-blue-900 text-white border-black shadow-md'
+                        : 'bg-white text-slate-800 border-slate-300 hover:border-blue-700 hover:bg-blue-50'
+                    }`}
+                  >
+                    {isSelected && <Check className="w-4 h-4 text-blue-300 stroke-[3]" />}
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* DADOS DO NAVIO COM BUSCA AUTOMÁTICA PELA INTERNET E SUGESTÃO */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2">
+                <Ship className="w-4 h-4 text-blue-700" />
+                1. DADOS DO NAVIO & IDENTIFICAÇÃO (Auto-Preenchimento Online)
+              </h3>
+              <span className="text-xs text-slate-500 italic">
+                Ao digitar o nome, dados como LOA, Boca, Bandeira e GRT carregam automaticamente
+              </span>
+            </div>
+
+            {/* Campo NOME DO NAVIO com autocomplete inteligente */}
+            <div ref={searchContainerRef} className="relative">
+              <label className="block text-xs font-bold uppercase text-black mb-1">
+                NOME DO NAVIO *
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={shipName}
+                  onChange={(e) => handleShipNameChange(e.target.value)}
+                  onFocus={() => {
+                    if (suggestions.length > 0) setIsDropdownOpen(true);
+                  }}
+                  placeholder="Digite o nome do navio (ex: MSC ANNA VICTORIA, EVER GIVEN, PETROBRAS...)"
+                  className="w-full bg-white border-2 border-black rounded-md px-3.5 py-2.5 text-sm font-bold text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800 focus:border-blue-800 uppercase pr-10"
+                  required
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                  {isSearchingOnline && (
+                    <span className="w-4 h-4 border-2 border-blue-700 border-t-transparent rounded-full animate-spin"></span>
+                  )}
+                  <Search className="w-4 h-4 text-slate-400" />
+                </div>
+              </div>
+
+              {/* Feedback badge if auto-filled */}
+              {dataSourceNotification && (
+                <div className={`mt-2 text-xs p-2 rounded border flex items-center gap-2 ${
+                  dataSourceNotification.source === 'online'
+                    ? 'bg-blue-50 text-blue-900 border-blue-300'
+                    : 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                }`}>
+                  <Sparkles className="w-4 h-4 shrink-0 text-blue-700" />
+                  <span className="font-semibold">{dataSourceNotification.message}</span>
+                </div>
+              )}
+
+              {/* Suggestions Dropdown (Local + Online) */}
+              {isDropdownOpen && suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border-2 border-black rounded-lg shadow-xl z-30 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                  <div className="px-3 py-1.5 bg-blue-900 text-white text-[11px] font-bold uppercase tracking-wider flex justify-between">
+                    <span>Sugestões Encontradas ({suggestions.length})</span>
+                    <span>Clique para preencher</span>
+                  </div>
+                  {suggestions.map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => applyVesselData(item)}
+                      className="w-full text-left px-3.5 py-2.5 hover:bg-blue-50 transition-colors flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <div className="font-bold text-sm text-black flex items-center gap-2">
+                          <span>{item.vessel.name}</span>
+                          <span className="text-[11px] font-mono px-1.5 py-0.2 bg-slate-100 border border-slate-300 rounded text-slate-700">
+                            IMO {item.vessel.imo}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-600 flex items-center gap-2 mt-0.5">
+                          <span>Bandeira: <strong>{item.vessel.flag}</strong></span>
+                          <span>·</span>
+                          <span>LOA: <strong>{item.vessel.loa}m</strong></span>
+                          <span>·</span>
+                          <span>Largura: <strong>{item.vessel.beam}m</strong></span>
+                          <span>·</span>
+                          <span>GRT: <strong>{item.vessel.grossTonnage.toLocaleString()}</strong></span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border whitespace-nowrap ${item.sourceBadgeColor}`}>
+                        {item.sourceLabel}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Grid dos dados técnicos do navio requeridos pelo usuário: LOA, BEAM, CALADO, PROCEDÊNCIA, PRÓXIMO PORTO */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  LOA (COMPRIMENTO) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={loa}
+                    onChange={(e) => setLoa(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    required
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  BEAM (LARGURA / BOCA) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={beam}
+                    onChange={(e) => setBeam(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    required
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  GRT (ARQUEAÇÃO)
+                </label>
+                <input
+                  type="number"
+                  value={grt}
+                  onChange={(e) => setGrt(parseInt(e.target.value) || 0)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  NACIONALIDADE
+                </label>
+                <input
+                  type="text"
+                  value={nationality}
+                  onChange={(e) => setNationality(e.target.value)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  CALADO VANTE (M)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={draftFwd}
+                  onChange={(e) => setDraftFwd(parseFloat(e.target.value) || 0)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  CALADO RÉ (M)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={draftAft}
+                  onChange={(e) => setDraftAft(parseFloat(e.target.value) || 0)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+            </div>
+
+            {/* PROCEDENCIA & PROXIMO PORTO */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  PROCEDÊNCIA (PORTO DE ORIGEM) *
+                </label>
+                <input
+                  type="text"
+                  value={origin}
+                  onChange={(e) => setOrigin(e.target.value)}
+                  placeholder="Ex: Rotterdam (NLRTM) ou Santos"
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  PRÓXIMO PORTO (DESTINO) *
+                </label>
+                <input
+                  type="text"
+                  value={nextPort}
+                  onChange={(e) => setNextPort(e.target.value)}
+                  placeholder="Ex: Santos (BRSSZ) ou Paranaguá"
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* HORÁRIOS DA MANOBRA: PRIMEIRO CABO, DESATRACAÇÃO, ATRACAÇÃO, MODELO DE ATRACAÇÃO, TEMPO DE MANOBRAS */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4">
+            <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2 border-b border-slate-200 pb-2">
+              <Clock className="w-4 h-4 text-blue-700" />
+              2. HORÁRIOS OPERACIONAIS & MODELO DE ATRACAÇÃO
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  PRIMEIRO CABO *
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="time"
+                    value={firstLineTime}
+                    onChange={(e) => setFirstLineTime(e.target.value)}
+                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setFirstLineTime(now.toTimeString().slice(0, 5));
+                    }}
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    title="Definir horário atual"
+                  >
+                    Agora
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  DESATRACAÇÃO *
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="time"
+                    value={unmooringTime}
+                    onChange={(e) => setUnmooringTime(e.target.value)}
+                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setUnmooringTime(now.toTimeString().slice(0, 5));
+                    }}
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    title="Definir horário atual"
+                  >
+                    Agora
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  ATRACAÇÃO *
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="time"
+                    value={berthingTime}
+                    onChange={(e) => setBerthingTime(e.target.value)}
+                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setBerthingTime(now.toTimeString().slice(0, 5));
+                    }}
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    title="Definir horário atual"
+                  >
+                    Agora
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  TEMPO DE MANOBRAS
+                </label>
+                <input
+                  type="text"
+                  value={maneuverDuration}
+                  onChange={(e) => setManeuverDuration(e.target.value)}
+                  placeholder="Ex: 1h 25m"
+                  className="w-full bg-blue-50 border border-blue-800 rounded px-2.5 py-2 text-sm font-bold text-blue-900"
+                />
+              </div>
+            </div>
+
+            {/* MODELO DE ATRACAÇÃO, BERÇO & PRÁTICO RESPONSÁVEL */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  MODELO DE ATRACAÇÃO *
+                </label>
+                <select
+                  value={berthingModel}
+                  onChange={(e) => setBerthingModel(e.target.value as BerthingModel)}
+                  className="w-full bg-white border-2 border-black rounded px-3 py-2 text-sm font-bold text-black"
+                >
+                  <option value="Costado Bombordo (BB)">Costado de Bombordo (BB)</option>
+                  <option value="Costado Boreste (BE)">Costado de Boreste (BE)</option>
+                  <option value="Mediterrânea (Popa)">Mediterrânea (Popa ao Cais)</option>
+                  <option value="Amarras / Bóias">Amarras / Bóias de Amarração</option>
+                  <option value="Dolphin / Terminal">Dolphin / Terminal Flutuante</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  BERÇO / CAIS DESTINADO
+                </label>
+                <input
+                  type="text"
+                  value={berthTo}
+                  onChange={(e) => setBerthTo(e.target.value)}
+                  placeholder="Ex: Berço 101 ou Cais Norte"
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1 flex items-center justify-between">
+                  <span>PRÁTICO RESPONSÁVEL *</span>
+                  {currentUser && pilotId === currentUser.id && (
+                    <span className="text-[10px] text-blue-800 font-bold bg-blue-100 px-1.5 py-0.2 rounded">
+                      Seu Perfil Ativo
+                    </span>
+                  )}
+                </label>
+                <select
+                  value={pilotId}
+                  onChange={(e) => {
+                    setPilotId(e.target.value);
+                    const p = pilots.find(item => item.id === e.target.value);
+                    if (p) setCustomPilotName(p.name);
+                  }}
+                  className="w-full bg-white border-2 border-black rounded px-3 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                >
+                  {currentUser && (
+                    <option value={currentUser.id}>
+                      ★ {currentUser.name} ({currentUser.rank}) [Você]
+                    </option>
+                  )}
+                  {pilots
+                    .filter(p => !currentUser || p.id !== currentUser.id)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.licenseNumber || p.category})
+                      </option>
+                    ))}
+                  {pilots.length === 0 && !currentUser && (
+                    <option value="">Nenhum prático registado</option>
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* REBOCADORES & TEMPO DE ASSISTÊNCIA (ARRANQUE, INÍCIO, FIM) */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4">
+            <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2 border-b border-slate-200 pb-2">
+              <Anchor className="w-4 h-4 text-blue-700" />
+              3. REBOCADORES & TEMPO DE ASSISTÊNCIA
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  NÚMERO DE REBOCADORES
+                </label>
+                <div className="flex gap-1">
+                  {[0, 1, 2, 3, 4].map(num => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => setTugsCount(num)}
+                      className={`flex-1 py-2 rounded font-black text-sm border-2 transition-all ${
+                        tugsCount === num
+                          ? 'bg-blue-900 text-white border-black'
+                          : 'bg-white text-slate-800 border-slate-300 hover:bg-blue-50'
+                      }`}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  ARRANQUE (SAÍDA DA BASE)
+                </label>
+                <input
+                  type="time"
+                  value={tugArranque}
+                  onChange={(e) => setTugArranque(e.target.value)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  INÍCIO (ASSISTÊNCIA / CABOS)
+                </label>
+                <input
+                  type="time"
+                  value={tugInicio}
+                  onChange={(e) => setTugInicio(e.target.value)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-black mb-1">
+                  FIM (LIBERAÇÃO)
+                </label>
+                <input
+                  type="time"
+                  value={tugFim}
+                  onChange={(e) => setTugFim(e.target.value)}
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* OBSERVAÇÃO */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-2">
+            <label className="block text-xs font-bold uppercase text-blue-900">
+              4. OBSERVAÇÃO DO PRÁTICO
+            </label>
+            <textarea
+              rows={3}
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Anotações operacionais, condição de mar, vento, defensas, amarras ou ocorrências..."
+              className="w-full bg-white border-2 border-black rounded-md p-3 text-sm text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800"
+            />
+          </div>
+
+          {/* ESPAÇO PARA FOTO QUE AUTOMATICAMENTE VIRA PDF ANEXADO AOS REGISTOS */}
+          <div className="border-2 border-black rounded-lg p-4 bg-blue-50/50 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2">
+                <Camera className="w-5 h-5 text-blue-800" />
+                5. ANEXO FOTOGRÁFICO (CONVERTIDO AUTOMATICAMENTE EM PDF)
+              </h3>
+              <span className="text-xs bg-blue-900 text-white font-semibold px-2 py-0.5 rounded border border-black">
+                Anexo Obrigatório de Manobra
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-700 leading-relaxed">
+              Fotografe ou anexe a folha de manobra assinada pelo comandante, o costado do navio, cabos ou condições no cais. 
+              A imagem é processada e incorporada automaticamente no <strong>PDF Oficial de Manobra</strong>.
+            </p>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              capture="environment"
+              onChange={handlePhotoUpload}
+              className="hidden"
+            />
+
+            {!photoDataUrl ? (
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-blue-800 rounded-lg p-6 bg-white hover:bg-blue-50 transition-all cursor-pointer flex flex-col items-center justify-center text-center space-y-2 group"
+              >
+                <div className="w-12 h-12 rounded-full bg-blue-100 border border-blue-300 flex items-center justify-center text-blue-900 group-hover:scale-110 transition-transform">
+                  <Upload className="w-6 h-6" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-black">
+                    Clique para Tirar Foto ou Carregar Arquivo
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Formatos JPG, PNG ou Captura direta da Câmera
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white border-2 border-black rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold text-black">
+                    <Check className="w-4 h-4 text-emerald-600" />
+                    <span>Foto Anexada: {photoFileName || 'Foto da Manobra'}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded font-bold text-slate-800"
+                    >
+                      Trocar Foto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhotoDataUrl(null);
+                        setPhotoFileName('');
+                      }}
+                      className="text-xs px-2.5 py-1 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 rounded font-bold"
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative rounded-md overflow-hidden border border-slate-300 max-h-56 bg-slate-900 flex items-center justify-center">
+                  <img
+                    src={photoDataUrl}
+                    alt="Foto Anexa"
+                    className="max-h-56 w-auto object-contain"
+                  />
+                  <div className="absolute bottom-2 left-2 bg-black/80 text-white text-[11px] px-2 py-0.5 rounded font-mono">
+                    PDF Anexo Pronto
+                  </div>
+                </div>
+
+                {/* Botão para gerar e baixar PDF com a foto imediatamente */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-200">
+                  <div className="text-xs text-slate-600">
+                    Esta foto será embutida na página de comprovante do PDF oficial.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleQuickDownloadPdf}
+                    disabled={isGeneratingPdf}
+                    className="w-full sm:w-auto px-4 py-2 bg-black hover:bg-slate-800 text-white rounded-md font-bold text-xs flex items-center justify-center gap-2 transition-colors border border-black shadow"
+                  >
+                    {isGeneratingPdf ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span>Gerando PDF com Foto...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 text-blue-300" />
+                        <span>Descarregar PDF Oficial com Foto</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* BOTÕES DE AÇÃO DO FORMULÁRIO */}
+          <div className="pt-4 border-t-2 border-black flex flex-col sm:flex-row items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-lg border-2 border-black font-bold text-sm text-black hover:bg-slate-100 transition-colors"
+            >
+              Cancelar
+            </button>
+
+            <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-2">
+              <button
+                type="button"
+                onClick={handleQuickDownloadPdf}
+                disabled={isGeneratingPdf}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-lg border-2 border-black bg-white hover:bg-blue-50 text-blue-900 font-bold text-sm flex items-center justify-center gap-2 transition-colors"
+              >
+                <FileText className="w-4 h-4" />
+                <span>Exportar PDF</span>
+              </button>
+
+              <button
+                type="submit"
+                className="w-full sm:w-auto px-6 py-2.5 rounded-lg border-2 border-black bg-blue-900 hover:bg-blue-800 text-white font-bold text-sm tracking-wide shadow-md flex items-center justify-center gap-2 transition-colors"
+              >
+                <Check className="w-4 h-4 text-blue-300 stroke-[3]" />
+                <span>GUARDAR REGISTO DE MANOBRA</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
