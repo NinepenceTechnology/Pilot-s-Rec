@@ -5,6 +5,175 @@ import path from 'path';
 import {defineConfig, Plugin} from 'vite';
 
 // LINT.IfChange(aistudio_media_plugin)
+function vesselFinderPlugin(): Plugin {
+  return {
+    name: 'vite-plugin-vesselfinder',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url || !req.url.startsWith('/api/')) {
+          return next();
+        }
+
+        const parsedUrl = new URL(req.url, 'http://localhost');
+
+        if (parsedUrl.pathname === '/api/vesselfinder') {
+          const query = parsedUrl.searchParams.get('query') || '';
+          if (!query || query.trim().length < 2) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: true, vessels: [] }));
+            return;
+          }
+
+          try {
+            const https = await import('https');
+            const targetUrl = `https://www.vesselfinder.com/vessels?name=${encodeURIComponent(query.trim())}`;
+            
+            const fetchPromise = new Promise<string>((resolve, reject) => {
+              const request = https.get(
+                targetUrl,
+                {
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+                  },
+                  timeout: 6000
+                },
+                (response) => {
+                  if (response.statusCode && response.statusCode >= 400) {
+                    reject(new Error(`VesselFinder returned HTTP ${response.statusCode}`));
+                    return;
+                  }
+                  let data = '';
+                  response.on('data', chunk => data += chunk);
+                  response.on('end', () => resolve(data));
+                }
+              );
+              request.on('error', reject);
+              request.on('timeout', () => {
+                request.destroy();
+                reject(new Error('Timeout'));
+              });
+            });
+
+            const html = await fetchPromise;
+            const rows: any[] = [];
+            const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+            let match;
+            while ((match = trRegex.exec(html)) !== null && rows.length < 8) {
+              const trContent = match[1];
+              const imoMatch = trContent.match(/href="\/vessels\/details\/(\d+)"/i);
+              const nameMatch = trContent.match(/<div class="slna">([^<]+)<\/div>/i);
+              const typeMatch = trContent.match(/<div class="slty">([^<]+)<\/div>/i);
+              const flagMatch = trContent.match(/title="([^"]+)"/i);
+              const gtMatch = trContent.match(/<td class="v4[^"]*">([^<]+)<\/td>/i);
+              const dwtMatch = trContent.match(/<td class="v5[^"]*">([^<]+)<\/td>/i);
+              const dimMatch = trContent.match(/<td class="v6[^"]*">([^<]+)<\/td>/i);
+
+              if (imoMatch && nameMatch) {
+                let loa = 0;
+                let beam = 0;
+                if (dimMatch) {
+                  const dims = dimMatch[1].split('/').map(s => parseFloat(s.trim()));
+                  loa = dims[0] || 0;
+                  beam = dims[1] || 0;
+                }
+
+                // Map type to Portuguese VesselType
+                const rawType = typeMatch ? typeMatch[1].trim().toLowerCase() : '';
+                let mappedType = 'carga_geral';
+                if (rawType.includes('container')) mappedType = 'porta_conteiner';
+                else if (rawType.includes('bulk') || rawType.includes('ore')) mappedType = 'graneleiro';
+                else if (rawType.includes('tanker') || rawType.includes('oil') || rawType.includes('crude')) mappedType = 'petroleiro';
+                else if (rawType.includes('chemical')) mappedType = 'quimico';
+                else if (rawType.includes('lng') || rawType.includes('lpg') || rawType.includes('gas')) mappedType = 'gasoso_gnl_glp';
+                else if (rawType.includes('vehicle') || rawType.includes('ro-ro') || rawType.includes('roro')) mappedType = 'ro_ro_veiculos';
+                else if (rawType.includes('tug')) mappedType = 'rebocador';
+
+                rows.push({
+                  name: nameMatch[1].trim(),
+                  imo: imoMatch[1],
+                  type: mappedType,
+                  typeName: typeMatch ? typeMatch[1].trim() : 'Navio Mercante',
+                  flag: flagMatch ? flagMatch[1].trim() : 'Internacional',
+                  grossTonnage: gtMatch ? parseInt(gtMatch[1].replace(/\D/g, '')) || 0 : 0,
+                  dwt: dwtMatch ? parseInt(dwtMatch[1].replace(/\D/g, '')) || 0 : 0,
+                  loa,
+                  beam,
+                  provider: 'vessel_finder'
+                });
+              }
+            }
+
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: true, vessels: rows }));
+            return;
+          } catch (err: any) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: err.message, vessels: [] }));
+            return;
+          }
+        }
+
+        if (parsedUrl.pathname === '/api/vesselfinder-details') {
+          const imo = parsedUrl.searchParams.get('imo') || '';
+          if (!imo || imo.trim().length < 4) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: 'IMO inválido' }));
+            return;
+          }
+
+          try {
+            const https = await import('https');
+            const targetUrl = `https://www.vesselfinder.com/vessels/details/${encodeURIComponent(imo.trim())}`;
+            const fetchPromise = new Promise<string>((resolve, reject) => {
+              const request = https.get(
+                targetUrl,
+                {
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                  },
+                  timeout: 6000
+                },
+                (response) => {
+                  let data = '';
+                  response.on('data', chunk => data += chunk);
+                  response.on('end', () => resolve(data));
+                }
+              );
+              request.on('error', reject);
+              request.on('timeout', () => {
+                request.destroy();
+                reject(new Error('Timeout'));
+              });
+            });
+
+            const html = await fetchPromise;
+            const csMatch = html.match(/Callsign<\/td>\s*<td[^>]*>([^<]+)<\/td>/i);
+            const draftMatch = html.match(/Draught<\/td>\s*<td[^>]*>([\d\.]+)\s*m/i);
+            const destMatch = html.match(/Destination<\/td>\s*<td[^>]*>([^<]+)<\/td>/i);
+
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({
+              success: true,
+              callSign: csMatch ? csMatch[1].trim() : '',
+              draft: draftMatch ? parseFloat(draftMatch[1]) : 0,
+              destination: destMatch ? destMatch[1].trim() : ''
+            }));
+            return;
+          } catch (err: any) {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 function aistudioMediaPlugin(): Plugin {
   return {
     name: 'vite-plugin-aistudio-media',
@@ -68,7 +237,7 @@ export default defineConfig(() => {
   return {
     // Required by Electron file:// loading and Capacitor's local WebView.
     base: './',
-    plugins: [react(), tailwindcss(), aistudioMediaPlugin()],
+    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), vesselFinderPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

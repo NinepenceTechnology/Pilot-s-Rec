@@ -403,14 +403,14 @@ export function searchVesselsWithSuggestions(
             provider: 'backup_interno'
           },
           source: 'backup_interno',
-          sourceLabel: '💾 Backup Interno (Frota Local)',
+          sourceLabel: '💾 Base de Dados Local (Frota Registada)',
           sourceBadgeColor: 'bg-amber-100 text-amber-900 border-amber-300'
         });
       }
     }
   });
 
-  // 2. Vasculhar no BACKUP INTERNO: Histórico de Manobras passadas
+  // 2. Vasculhar na BASE DE DADOS LOCAL: Histórico de Manobras passadas
   pastManeuvers.forEach(m => {
     const snap = m.vesselSnapshot;
     if (
@@ -441,14 +441,14 @@ export function searchVesselsWithSuggestions(
             provider: 'backup_interno'
           },
           source: 'backup_interno',
-          sourceLabel: `💾 Backup Interno (Manobra ${m.id})`,
+          sourceLabel: `💾 Base de Dados Local (Manobra ${m.id})`,
           sourceBadgeColor: 'bg-amber-100 text-amber-900 border-amber-300'
         });
       }
     }
   });
 
-  // 3. Vasculhar INTERNET: MarineTraffic & VesselFinder
+  // 3. Vasculhar Base de Navios Reais VesselFinder
   GLOBAL_MARITIME_FLEET.forEach(item => {
     if (
       item.name.toLowerCase().includes(clean) ||
@@ -463,14 +463,75 @@ export function searchVesselsWithSuggestions(
           source: isMarineTraffic ? 'marine_traffic' : 'vessel_finder',
           sourceLabel: isMarineTraffic 
             ? '🟢 MarineTraffic (AIS Live)' 
-            : '🔵 VesselFinder (Base Global)',
+            : '🌐 VesselFinder.com (Dados Reais do Navio)',
           sourceBadgeColor: isMarineTraffic 
             ? 'bg-emerald-100 text-emerald-900 border-emerald-300' 
-            : 'bg-cyan-100 text-cyan-900 border-cyan-300'
+            : 'bg-blue-100 text-blue-900 border-blue-400'
         });
       }
     }
   });
 
-  return results.slice(0, 8);
+  return results.slice(0, 10);
+}
+
+/**
+ * Consulta em tempo real o website VesselFinder.com via API para obter dados reais de navios.
+ */
+export async function fetchVesselFinderOnline(query: string): Promise<VesselSearchResult[]> {
+  if (!query || query.trim().length < 2) return [];
+  try {
+    const res = await fetch(`/api/vesselfinder?query=${encodeURIComponent(query.trim())}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!data.success || !Array.isArray(data.vessels)) return [];
+
+    return data.vessels.map((v: any) => ({
+      vessel: {
+        name: v.name,
+        imo: v.imo,
+        callSign: v.callSign || '',
+        flag: v.flag || 'Internacional',
+        flagCode: 'UN',
+        type: (v.type as VesselType) || 'carga_geral',
+        loa: v.loa || 0,
+        beam: v.beam || 0,
+        maxDraft: 0,
+        currentDraftFwd: 0,
+        currentDraftAft: 0,
+        agent: 'Agência Local',
+        origin: '',
+        destination: '',
+        grossTonnage: v.grossTonnage || 0,
+        dwt: v.dwt || 0,
+        provider: 'vessel_finder' as const
+      },
+      source: 'vessel_finder' as const,
+      sourceLabel: '🌐 VesselFinder.com (Dados Reais do Navio)',
+      sourceBadgeColor: 'bg-blue-100 text-blue-900 border-blue-400'
+    }));
+  } catch (e) {
+    console.warn('Falha ao consultar VesselFinder online:', e);
+    return [];
+  }
+}
+
+/**
+ * Consulta detalhes técnicos (Calado / Draught e Indicativo de Chamada) de um navio no VesselFinder.com
+ */
+export async function fetchVesselDetailsOnline(imo: string): Promise<{ callSign?: string; draft?: number; destination?: string } | null> {
+  if (!imo || imo.trim().length < 4) return null;
+  try {
+    const res = await fetch(`/api/vesselfinder-details?imo=${encodeURIComponent(imo.trim())}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return {
+      callSign: data.callSign || '',
+      draft: data.draft || 0,
+      destination: data.destination || ''
+    };
+  } catch {
+    return null;
+  }
 }

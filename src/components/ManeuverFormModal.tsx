@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Anchor, 
   X, 
@@ -17,7 +18,8 @@ import {
   Layers,
   Sparkles,
   AlertCircle,
-  Calendar
+  Calendar,
+  Activity
 } from 'lucide-react';
 import { useMaritime } from '../context/MaritimeContext';
 import { 
@@ -30,6 +32,8 @@ import {
 } from '../types/maritime';
 import { 
   searchVesselsWithSuggestions, 
+  fetchVesselFinderOnline,
+  fetchVesselDetailsOnline,
   VesselSearchResult 
 } from '../utils/vesselDatabase';
 import { generatePilotageManeuverPDF } from '../utils/pdfGenerator';
@@ -81,20 +85,77 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
   const [origin, setOrigin] = useState<string>(editManeuver?.vesselSnapshot.origin || initialVessel?.origin || '');
   const [nextPort, setNextPort] = useState<string>(editManeuver?.vesselSnapshot.destination || initialVessel?.destination || '');
 
-  // 2. PRIMEIRO CABO, DESATRACAÇÃO, ATRACAÇÃO, MODELO DE ATRACAÇÃO
-  const [firstLineTime, setFirstLineTime] = useState<string>(editManeuver?.firstLineAshored || editManeuver?.milestones?.firstLineAshored || '');
-  const [unmooringTime, setUnmooringTime] = useState<string>(editManeuver?.unmooringTime || editManeuver?.milestones?.commenceManeuver || '');
-  const [berthingTime, setBerthingTime] = useState<string>(editManeuver?.berthingTime || editManeuver?.milestones?.allFastCompleted || '');
-  const [berthingModel, setBerthingModel] = useState<BerthingModel>(editManeuver?.berthingModel || 'Costado Bombordo (BB)');
+  // Data da Manobra (Permite registo e alteração retroativa)
+  const [maneuverDate, setManeuverDate] = useState<string>(() => {
+    if (editManeuver?.maneuverDate) return editManeuver.maneuverDate;
+    if (editManeuver?.scheduledTime) return editManeuver.scheduledTime.slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
+  });
 
-  // 3. NÚMERO DE REBOCADORES, TEMPO DE ASSISTÊNCIA DE REBOCADORES (ARRANQUE, INICIO, FIM)
-  const [tugsCount, setTugsCount] = useState<number>(editManeuver?.tugCount ?? editManeuver?.tugs.length ?? 0);
+  // 2. HORÁRIOS OPERACIONAIS (ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO)
+  // Piloto a bordo (POB)
+  const [pilotOnBoardTime, setPilotOnBoardTime] = useState<string>(
+    editManeuver?.pilotOnBoardTime || editManeuver?.milestones?.pilotOnBoard || ''
+  );
+  // Último cabo (Mudança / Puxança / Desatracação)
+  const [lastLineTime, setLastLineTime] = useState<string>(
+    editManeuver?.lastLineCastOffTime || editManeuver?.milestones?.lastLineCastOff || editManeuver?.unmooringTime || ''
+  );
+  // Primeiro cabo (Atracação / Mudança / Puxança)
+  const [firstLineTime, setFirstLineTime] = useState<string>(
+    editManeuver?.firstLineAshored || editManeuver?.milestones?.firstLineAshored || ''
+  );
+  // Atracado (Atracação / Mudança / Puxança)
+  const [berthingTime, setBerthingTime] = useState<string>(
+    editManeuver?.allFastBerthingTime || editManeuver?.berthingTime || editManeuver?.milestones?.allFastCompleted || ''
+  );
+  // Desembarque do piloto (Todas as manobras)
+  const [pilotDisembarkedTime, setPilotDisembarkedTime] = useState<string>(
+    editManeuver?.pilotDisembarkedTime || editManeuver?.milestones?.pilotDisembarked || ''
+  );
+  // Modelo de atracação
+  const [berthingModel, setBerthingModel] = useState<BerthingModel>(
+    editManeuver?.berthingModel || 'Costado Bombordo (BB)'
+  );
+
+  // 3. NÚMERO DE REBOCADORES, TEMPO DE ASSISTÊNCIA DE REBOCADORES (ARRANQUE, INICIO / ENCOSTAM, FIM / DISPENSADOS)
+  const [tugsCount, setTugsCount] = useState<number>(editManeuver?.tugCount ?? editManeuver?.tugs?.length ?? 0);
   const [tugArranque, setTugArranque] = useState<string>(editManeuver?.tugTimings?.arranque || '');
-  const [tugInicio, setTugInicio] = useState<string>(editManeuver?.tugTimings?.inicio || '');
-  const [tugFim, setTugFim] = useState<string>(editManeuver?.tugTimings?.fim || '');
+  const [tugInicio, setTugInicio] = useState<string>(
+    editManeuver?.tugsMadeFastTime || editManeuver?.tugTimings?.inicio || ''
+  );
+  const [tugFim, setTugFim] = useState<string>(
+    editManeuver?.tugsDismissedTime || editManeuver?.tugTimings?.fim || ''
+  );
+
+  // Helper de cálculo de duração entre dois horários
+  const calculateDuration = (start: string, end: string): { formatted: string; minutes: number; hours: number } => {
+    if (!start || !end) return { formatted: '--', minutes: 0, hours: 0 };
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return { formatted: '--', minutes: 0, hours: 0 };
+    let diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff < 0) diff += 24 * 60;
+    const hrs = Math.floor(diff / 60);
+    const mins = diff % 60;
+    const hoursDecimal = Math.round((diff / 60) * 10) / 10;
+    return {
+      formatted: `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`,
+      minutes: diff,
+      hours: hoursDecimal
+    };
+  };
+
+  // Cálculo de fadiga: desde embarque até desembarque do piloto
+  const pilotDuty = calculateDuration(pilotOnBoardTime, pilotDisembarkedTime);
+
+  // Horário de operações de rebocadores: desde que encostam até serem dispensados
+  const tugOperations = calculateDuration(tugInicio, tugFim);
 
   // 4. TEMPO DE MANOBRAS (Calculado ou manual)
-  const [maneuverDuration, setManeuverDuration] = useState<string>(editManeuver?.maneuverDurationFormatted || (editManeuver?.durationMinutes ? `${editManeuver.durationMinutes} min` : ''));
+  const [maneuverDuration, setManeuverDuration] = useState<string>(
+    editManeuver?.maneuverDurationFormatted || (editManeuver?.durationMinutes ? `${editManeuver.durationMinutes} min` : '')
+  );
 
   // 5. TIPO DE MANOBRAS: ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO
   const [maneuverType, setManeuverType] = useState<ManeuverType>(editManeuver?.maneuverType || 'atracacao');
@@ -130,22 +191,33 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-calculate maneuver duration if unmooring & berthing times are provided
+  // Auto-calculate maneuver duration based on appropriate operational start and finish
   useEffect(() => {
-    if (unmooringTime && berthingTime) {
-      const [h1, m1] = unmooringTime.split(':').map(Number);
-      const [h2, m2] = berthingTime.split(':').map(Number);
-      if (!isNaN(h1) && !isNaN(m1) && !isNaN(h2) && !isNaN(m2)) {
-        let diffMinutes = (h2 * 60 + m2) - (h1 * 60 + m1);
-        if (diffMinutes < 0) diffMinutes += 24 * 60; // Next day wrap
-        const hrs = Math.floor(diffMinutes / 60);
-        const mins = diffMinutes % 60;
-        setManeuverDuration(`${hrs > 0 ? `${hrs}h ` : ''}${mins}m (${diffMinutes} min)`);
+    let start = '';
+    let finish = '';
+
+    if (maneuverType === 'atracacao') {
+      start = firstLineTime || pilotOnBoardTime;
+      finish = berthingTime || pilotDisembarkedTime;
+    } else if (maneuverType === 'mudanca' || maneuverType === 'puxanca') {
+      start = lastLineTime || pilotOnBoardTime;
+      finish = berthingTime || pilotDisembarkedTime;
+    } else if (maneuverType === 'desatracacao') {
+      start = lastLineTime || pilotOnBoardTime;
+      finish = pilotDisembarkedTime;
+    }
+
+    if (start && finish) {
+      const dur = calculateDuration(start, finish);
+      if (dur.minutes > 0) {
+        setManeuverDuration(`${dur.formatted} (${dur.minutes} min)`);
       }
     }
-  }, [unmooringTime, berthingTime]);
+  }, [maneuverType, pilotOnBoardTime, lastLineTime, firstLineTime, berthingTime, pilotDisembarkedTime]);
 
-  // Handle Ship Name typing with MarineTraffic, VesselFinder and Internal Backup Suggestions
+  const onlineSearchTimeoutRef = useRef<any>(null);
+
+  // Handle Ship Name typing with Local Database + Live VesselFinder.com Suggestions
   const handleShipNameChange = (query: string) => {
     setShipName(query);
     setDataSourceNotification(null);
@@ -153,35 +225,86 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
     if (query.trim().length < 2) {
       setSuggestions([]);
       setIsDropdownOpen(false);
+      setIsSearchingOnline(false);
+      if (onlineSearchTimeoutRef.current) clearTimeout(onlineSearchTimeoutRef.current);
       return;
     }
 
-    const matches = searchVesselsWithSuggestions(query, vessels, maneuvers);
-    setSuggestions(matches);
-    setIsDropdownOpen(matches.length > 0);
+    // 1. Instant search from LOCAL DATABASE (registered vessels and past maneuvers)
+    const localMatches = searchVesselsWithSuggestions(query, vessels, maneuvers);
+    setSuggestions(localMatches);
+    setIsDropdownOpen(localMatches.length > 0);
+
+    // 2. Query VesselFinder.com via backend proxy with debouncing
+    if (onlineSearchTimeoutRef.current) clearTimeout(onlineSearchTimeoutRef.current);
+
+    if (isOnline) {
+      setIsSearchingOnline(true);
+      onlineSearchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const onlineResults = await fetchVesselFinderOnline(query);
+          if (onlineResults && onlineResults.length > 0) {
+            setSuggestions(prev => {
+              const seenImos = new Set(prev.map(p => p.vessel.imo));
+              const merged = [...prev];
+              for (const item of onlineResults) {
+                if (!seenImos.has(item.vessel.imo)) {
+                  seenImos.add(item.vessel.imo);
+                  merged.push(item);
+                }
+              }
+              return merged;
+            });
+            setIsDropdownOpen(true);
+          }
+        } catch (err) {
+          console.warn('Erro ao carregar dados do VesselFinder:', err);
+        } finally {
+          setIsSearchingOnline(false);
+        }
+      }, 400);
+    }
   };
 
   // When a vessel is selected from suggestions or auto-fetched
-  const applyVesselData = (result: VesselSearchResult) => {
+  const applyVesselData = async (result: VesselSearchResult) => {
     const v = result.vessel;
     setShipName(v.name);
     setImoNumber(v.imo);
-    setNationality(v.flag);
+    setNationality(v.flag || 'Internacional');
     setVesselType(v.type);
-    setLoa(v.loa);
-    setBeam(v.beam);
-    setGrt(v.grossTonnage);
-    setDraftFwd(v.currentDraftFwd);
-    setDraftAft(v.currentDraftAft);
-    setOrigin(v.origin);
-    setNextPort(v.destination);
+    setLoa(v.loa || 0);
+    setBeam(v.beam || 0);
+    setGrt(v.grossTonnage || 0);
+    setDraftFwd(v.currentDraftFwd || 0);
+    setDraftAft(v.currentDraftAft || 0);
+    if (v.origin) setOrigin(v.origin);
+    if (v.destination) setNextPort(v.destination);
 
     setIsDropdownOpen(false);
 
     setDataSourceNotification({
       source: result.source === 'backup_interno' ? 'local' : 'online',
-      message: `${result.sourceLabel}: ${v.name} (${v.flag} · LOA ${v.loa}m · Boca ${v.beam}m · Calados Vte ${v.currentDraftFwd}m / Ré ${v.currentDraftAft}m · GRT ${v.grossTonnage.toLocaleString()})`
+      message: `${result.sourceLabel}: ${v.name} (${v.flag || 'Internacional'} · LOA ${v.loa || '___'}m · Boca ${v.beam || '___'}m · Calado ${v.currentDraftAft ? v.currentDraftAft + 'm' : '___'} · GRT ${v.grossTonnage ? v.grossTonnage.toLocaleString() : '___'})`
     });
+
+    // If IMO is valid, consult VesselFinder for live draft & destination
+    if (v.imo && v.imo.length >= 4 && isOnline) {
+      try {
+        const details = await fetchVesselDetailsOnline(v.imo);
+        if (details) {
+          if (details.draft && details.draft > 0) {
+            setDraftAft(details.draft);
+            setDraftFwd(Math.max(0, parseFloat((details.draft - 0.4).toFixed(1))));
+          }
+          if (details.destination && !nextPort) {
+            setNextPort(details.destination);
+          }
+        }
+      } catch (e) {
+        console.warn('Erro ao buscar detalhes adicionais do navio:', e);
+      }
+    }
   };
 
   // Close dropdown on outside click
@@ -239,15 +362,27 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
         berthTo: berthTo || 'Cais de Atracação',
         pilotId: selectedPilot?.id || 'plt-01',
         pilotName: pilotDisplayName,
-        milestones: {
-          commenceManeuver: unmooringTime,
-          firstLineAshored: firstLineTime,
-          allFastCompleted: berthingTime
-        },
-        durationMinutes: 80,
-        maneuverDurationFormatted: maneuverDuration,
+        maneuverDate: maneuverDate,
+        pilotOnBoardTime: pilotOnBoardTime,
+        lastLineCastOffTime: lastLineTime,
         firstLineAshored: firstLineTime,
-        unmooringTime: unmooringTime,
+        allFastBerthingTime: berthingTime,
+        pilotDisembarkedTime: pilotDisembarkedTime,
+        tugsMadeFastTime: tugInicio,
+        tugsDismissedTime: tugFim,
+        tugOperationalHours: tugOperations.hours,
+        pilotDutyHours: pilotDuty.hours,
+        milestones: {
+          pilotOnBoard: pilotOnBoardTime,
+          lastLineCastOff: lastLineTime,
+          firstLineAshored: firstLineTime,
+          allFastCompleted: berthingTime,
+          pilotDisembarked: pilotDisembarkedTime,
+          commenceManeuver: lastLineTime || pilotOnBoardTime,
+        },
+        durationMinutes: pilotDuty.minutes || 80,
+        maneuverDurationFormatted: maneuverDuration || pilotDuty.formatted,
+        unmooringTime: lastLineTime,
         berthingTime: berthingTime,
         berthingModel: berthingModel,
         tugCount: tugsCount,
@@ -378,15 +513,30 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
       berthTo: berthTo || 'Cais de Atracação',
       pilotId: finalPilotId,
       pilotName: finalPilotName,
+      maneuverDate: maneuverDate,
+      pilotOnBoardTime: pilotOnBoardTime,
+      lastLineCastOffTime: lastLineTime,
+      firstLineAshored: firstLineTime,
+      allFastBerthingTime: berthingTime,
+      pilotDisembarkedTime: pilotDisembarkedTime,
+      tugsMadeFastTime: tugInicio,
+      tugsDismissedTime: tugFim,
+      tugOperationalHours: tugOperations.hours,
+      pilotDutyHours: pilotDuty.hours,
+      scheduledTime: `${maneuverDate}T${pilotOnBoardTime || lastLineTime || '08:00'}:00.000Z`,
+      completedTime: `${maneuverDate}T${pilotDisembarkedTime || berthingTime || '10:00'}:00.000Z`,
+      durationMinutes: pilotDuty.minutes || 80,
       milestones: {
         ...(editManeuver?.milestones || {}),
-        commenceManeuver: unmooringTime || editManeuver?.milestones?.commenceManeuver,
-        firstLineAshored: firstLineTime || editManeuver?.milestones?.firstLineAshored,
-        allFastCompleted: berthingTime || editManeuver?.milestones?.allFastCompleted
+        pilotOnBoard: pilotOnBoardTime,
+        lastLineCastOff: lastLineTime,
+        firstLineAshored: firstLineTime,
+        allFastCompleted: berthingTime,
+        pilotDisembarked: pilotDisembarkedTime,
+        commenceManeuver: lastLineTime || pilotOnBoardTime,
       },
-      maneuverDurationFormatted: maneuverDuration,
-      firstLineAshored: firstLineTime,
-      unmooringTime: unmooringTime,
+      maneuverDurationFormatted: maneuverDuration || pilotDuty.formatted,
+      unmooringTime: lastLineTime,
       berthingTime: berthingTime,
       berthingModel: berthingModel,
       tugCount: tugsCount,
@@ -431,7 +581,13 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto transition-opacity duration-200">
       {/* Container in White, Deep Naval Blue and Black */}
-      <div className="bg-white border-2 border-black rounded-xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col my-auto max-h-[94vh] animate-in fade-in zoom-in-95 duration-200">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 12 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+        className="bg-white border-2 border-black rounded-xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col my-auto max-h-[94vh]"
+      >
         
         {/* Top Header - Deep Blue with White & Black Accents */}
         <div className="bg-blue-900 text-white px-5 py-4 border-b-2 border-black flex items-center justify-between">
@@ -491,6 +647,44 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="p-5 sm:p-6 overflow-y-auto space-y-6 text-slate-900">
           
+          {/* DATA DA OPERAÇÃO / REGISTO RETROATIVO */}
+          <div className="bg-amber-50/80 border-2 border-amber-400 rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <label className="block text-xs font-black uppercase text-amber-950 flex items-center gap-1.5">
+                  <span>{language === 'pt' ? 'Data da Operação / Manobra' : 'Operation / Maneuver Date'} *</span>
+                  <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-bold">
+                    {language === 'pt' ? 'Registo Retroativo' : 'Retroactive Entry'}
+                  </span>
+                </label>
+                <p className="text-[11px] text-amber-800 leading-tight mt-0.5">
+                  {language === 'pt' 
+                    ? 'Possibilidade de registo ou alteração da data para quando a manobra foi realizada anteriormente.'
+                    : 'Log or change the operation date if the maneuver was conducted prior to registration.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <input
+                type="date"
+                value={maneuverDate}
+                onChange={(e) => setManeuverDate(e.target.value)}
+                className="bg-white border-2 border-black rounded-md px-3 py-2 text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-blue-900 w-full sm:w-auto"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setManeuverDate(new Date().toISOString().slice(0, 10))}
+                className="text-xs px-3 py-2 bg-white hover:bg-amber-100 border-2 border-amber-500 rounded-md font-bold text-amber-950 whitespace-nowrap shadow-xs"
+              >
+                {language === 'pt' ? 'Hoje' : 'Today'}
+              </button>
+            </div>
+          </div>
+
           {/* SELEÇÃO DO TIPO DE MANOBRA (4 opções exatas requeridas pelo usuário) */}
           <div className="bg-slate-50 border-2 border-slate-300 rounded-lg p-3 sm:p-4">
             <label className="block text-xs font-bold uppercase tracking-wider text-blue-900 mb-2">
@@ -612,94 +806,120 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               )}
             </div>
 
-            {/* Grid dos dados técnicos do navio requeridos pelo usuário: LOA, BEAM, CALADO, PROCEDÊNCIA, PRÓXIMO PORTO */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              <div>
+            {/* Grid dos dados técnicos do navio requeridos pelo usuário: IMO, TIPO, LOA, BEAM, GRT, NACIONALIDADE, CALADOS */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+              <div className="col-span-2">
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  LOA (COMPRIMENTO) *
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={loa}
-                    onChange={(e) => setLoa(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                    required
-                  />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  BEAM (LARGURA / BOCA) *
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={beam}
-                    onChange={(e) => setBeam(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                    required
-                  />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  GRT (ARQUEAÇÃO)
+                  NÚMERO IMO *
                 </label>
                 <input
-                  type="number"
-                  value={grt}
-                  onChange={(e) => setGrt(parseInt(e.target.value) || 0)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                  type="text"
+                  value={imoNumber}
+                  onChange={(e) => setImoNumber(e.target.value)}
+                  placeholder="___"
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400 font-mono"
+                  required
                 />
               </div>
 
               <div>
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  NACIONALIDADE
+                  LOA (COMP.) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={loa === 0 ? '' : loa}
+                    onChange={(e) => setLoa(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
+                    required
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  BOCA (LARG.) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={beam === 0 ? '' : beam}
+                    onChange={(e) => setBeam(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
+                    required
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  GRT (ARQ.)
+                </label>
+                <input
+                  type="number"
+                  value={grt === 0 ? '' : grt}
+                  onChange={(e) => setGrt(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
+                  placeholder="___"
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-black mb-1">
+                  BANDEIRA
                 </label>
                 <input
                   type="text"
                   value={nationality}
                   onChange={(e) => setNationality(e.target.value)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                  placeholder="___"
+                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
                 />
               </div>
 
               <div>
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  CALADO VANTE (M)
+                  CALADO VTE
                 </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={draftFwd}
-                  onChange={(e) => setDraftFwd(parseFloat(e.target.value) || 0)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={draftFwd === 0 ? '' : draftFwd}
+                    onChange={(e) => setDraftFwd(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
               </div>
 
               <div>
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  CALADO RÉ (M)
+                  CALADO RÉ
                 </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={draftAft}
-                  onChange={(e) => setDraftAft(parseFloat(e.target.value) || 0)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={draftAft === 0 ? '' : draftAft}
+                    onChange={(e) => setDraftAft(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
+                </div>
               </div>
             </div>
 
-            {/* PROCEDENCIA & PROXIMO PORTO */}
+            {/* PROCEDENCIA & PROXIMO PORTO COM EXEMPLOS DE MOÇAMBIQUE */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
@@ -709,8 +929,8 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   type="text"
                   value={origin}
                   onChange={(e) => setOrigin(e.target.value)}
-                  placeholder="Ex: Rotterdam (NLRTM) ou Santos"
-                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                  placeholder="___ (Ex: Porto de Maputo, Beira ou Durban)"
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black placeholder:text-slate-400"
                   required
                 />
               </div>
@@ -723,111 +943,237 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   type="text"
                   value={nextPort}
                   onChange={(e) => setNextPort(e.target.value)}
-                  placeholder="Ex: Santos (BRSSZ) ou Paranaguá"
-                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
+                  placeholder="___ (Ex: Porto de Nacala, Pemba ou Richards Bay)"
+                  className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black placeholder:text-slate-400"
                   required
                 />
               </div>
             </div>
           </div>
 
-          {/* HORÁRIOS DA MANOBRA: PRIMEIRO CABO, DESATRACAÇÃO, ATRACAÇÃO, MODELO DE ATRACAÇÃO, TEMPO DE MANOBRAS */}
-          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4">
-            <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2 border-b border-slate-200 pb-2">
-              <Clock className="w-4 h-4 text-blue-700" />
-              2. HORÁRIOS OPERACIONAIS & MODELO DE ATRACAÇÃO
-            </h3>
+          {/* HORÁRIOS DA MANOBRA CONFORME O TIPO: ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-blue-700" />
+                2. {language === 'pt' ? 'HORÁRIOS OPERACIONAIS & MODELO DE ATRACAÇÃO' : 'OPERATIONAL MILESTONES & BERTHING MODEL'}
+              </h3>
+              <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded border border-slate-300 self-start sm:self-auto">
+                {language === 'pt' ? 'Campos dinâmicos para:' : 'Fields configured for:'} <strong className="text-blue-900">{maneuverType.toUpperCase()}</strong>
+              </span>
+            </div>
 
+            {/* CAMPOS DINÂMICOS CONFORME O TIPO DE MANOBRA */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* PILOTO A BORDO (Embarque) - Requerido em ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO */}
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  PRIMEIRO CABO *
+                  {language === 'pt' ? 'Piloto a Bordo (POB)' : 'Pilot On Board (POB)'} *
                 </label>
                 <div className="flex gap-1.5">
                   <input
                     type="time"
-                    value={firstLineTime}
-                    onChange={(e) => setFirstLineTime(e.target.value)}
-                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    value={pilotOnBoardTime}
+                    onChange={(e) => setPilotOnBoardTime(e.target.value)}
+                    className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      const now = new Date();
-                      setFirstLineTime(now.toTimeString().slice(0, 5));
-                    }}
+                    onClick={() => setPilotOnBoardTime(new Date().toTimeString().slice(0, 5))}
                     className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
-                    title="Definir horário atual"
+                    title={language === 'pt' ? 'Definir horário atual' : 'Set current time'}
                   >
-                    Agora
+                    {language === 'pt' ? 'Agora' : 'Now'}
                   </button>
                 </div>
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                  {language === 'pt' ? 'Início do serviço de assessoria' : 'Pilot boarding time'}
+                </p>
               </div>
 
+              {/* ÚLTIMO CABO - Requerido em MUDANÇA, PUXANÇA, DESATRACAÇÃO */}
+              {(maneuverType === 'mudanca' || maneuverType === 'puxanca' || maneuverType === 'desatracacao') && (
+                <div>
+                  <label className="block text-xs font-bold uppercase text-black mb-1">
+                    {language === 'pt' ? 'Último Cabo (Largado)' : 'Last Line (Cast Off)'} *
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="time"
+                      value={lastLineTime}
+                      onChange={(e) => setLastLineTime(e.target.value)}
+                      className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setLastLineTime(new Date().toTimeString().slice(0, 5))}
+                      className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    >
+                      {language === 'pt' ? 'Agora' : 'Now'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-600 mt-0.5">
+                    {language === 'pt' ? 'Navio desatracado / livre (All clear)' : 'All lines cast off'}
+                  </p>
+                </div>
+              )}
+
+              {/* PRIMEIRO CABO - Requerido em ATRACAÇÃO, MUDANÇA, PUXANÇA */}
+              {(maneuverType === 'atracacao' || maneuverType === 'mudanca' || maneuverType === 'puxanca') && (
+                <div>
+                  <label className="block text-xs font-bold uppercase text-black mb-1">
+                    {language === 'pt' ? 'Primeiro Cabo em Terra' : 'First Line Ashore'} *
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="time"
+                      value={firstLineTime}
+                      onChange={(e) => setFirstLineTime(e.target.value)}
+                      className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFirstLineTime(new Date().toTimeString().slice(0, 5))}
+                      className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    >
+                      {language === 'pt' ? 'Agora' : 'Now'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-600 mt-0.5">
+                    {language === 'pt' ? 'Passagem do 1º cabo ao cabeço' : 'First mooring line ashore'}
+                  </p>
+                </div>
+              )}
+
+              {/* ATRACADO - Requerido em ATRACAÇÃO, MUDANÇA, PUXANÇA */}
+              {(maneuverType === 'atracacao' || maneuverType === 'mudanca' || maneuverType === 'puxanca') && (
+                <div>
+                  <label className="block text-xs font-bold uppercase text-black mb-1">
+                    {language === 'pt' ? 'Atracado (All Fast)' : 'All Fast Completed'} *
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="time"
+                      value={berthingTime}
+                      onChange={(e) => setBerthingTime(e.target.value)}
+                      className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setBerthingTime(new Date().toTimeString().slice(0, 5))}
+                      className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                    >
+                      {language === 'pt' ? 'Agora' : 'Now'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-600 mt-0.5">
+                    {language === 'pt' ? 'Todos os cabos encapelados e tesados' : 'Vessel safely moored'}
+                  </p>
+                </div>
+              )}
+
+              {/* DESEMBARQUE DO PILOTO - Requerido em ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO */}
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  DESATRACAÇÃO *
+                  {language === 'pt' ? 'Desembarque do Piloto' : 'Pilot Disembarked (Away)'} *
                 </label>
                 <div className="flex gap-1.5">
                   <input
                     type="time"
-                    value={unmooringTime}
-                    onChange={(e) => setUnmooringTime(e.target.value)}
-                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
+                    value={pilotDisembarkedTime}
+                    onChange={(e) => setPilotDisembarkedTime(e.target.value)}
+                    className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      const now = new Date();
-                      setUnmooringTime(now.toTimeString().slice(0, 5));
-                    }}
+                    onClick={() => setPilotDisembarkedTime(new Date().toTimeString().slice(0, 5))}
                     className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
-                    title="Definir horário atual"
                   >
-                    Agora
+                    {language === 'pt' ? 'Agora' : 'Now'}
                   </button>
                 </div>
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                  {language === 'pt' ? 'Término do serviço / Lancha' : 'Pilot ladder disembarkation'}
+                </p>
               </div>
 
+              {/* TEMPO DE MANOBRA (Formato resumido) */}
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  ATRACAÇÃO *
-                </label>
-                <div className="flex gap-1.5">
-                  <input
-                    type="time"
-                    value={berthingTime}
-                    onChange={(e) => setBerthingTime(e.target.value)}
-                    className="flex-1 bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const now = new Date();
-                      setBerthingTime(now.toTimeString().slice(0, 5));
-                    }}
-                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
-                    title="Definir horário atual"
-                  >
-                    Agora
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold uppercase text-black mb-1">
-                  TEMPO DE MANOBRAS
+                  {language === 'pt' ? 'Tempo de Manobra' : 'Maneuver Duration'}
                 </label>
                 <input
                   type="text"
                   value={maneuverDuration}
                   onChange={(e) => setManeuverDuration(e.target.value)}
-                  placeholder="Ex: 1h 25m"
+                  placeholder="Ex: 1h 20m"
                   className="w-full bg-blue-50 border border-blue-800 rounded px-2.5 py-2 text-sm font-bold text-blue-900"
                 />
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                  {language === 'pt' ? 'Calculado automaticamente' : 'Auto-calculated'}
+                </p>
+              </div>
+            </div>
+
+            {/* GESTÃO DE FADIGA DO PILOTO (Cálculo desde embarque até desembarque do piloto) */}
+            <div className="bg-blue-50/70 border border-blue-300 rounded-lg p-3 sm:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-blue-900 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                  <Activity className="w-5 h-5 text-blue-300" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black uppercase text-blue-950">
+                      {language === 'pt' ? 'Gestão de Fadiga do Piloto' : 'Pilot Fatigue Tracking'}
+                    </span>
+                    <span className="text-[10px] bg-blue-200 text-blue-900 font-bold px-2 py-0.5 rounded">
+                      {language === 'pt' ? 'Cálculo: Embarque → Desembarque' : 'Boarding → Disembarkation'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-800 mt-0.5">
+                    {pilotOnBoardTime && pilotDisembarkedTime ? (
+                      <>
+                        {language === 'pt' 
+                          ? `Período em serviço de passadiço: das ${pilotOnBoardTime} às ${pilotDisembarkedTime}.`
+                          : `Bridge duty span: from ${pilotOnBoardTime} to ${pilotDisembarkedTime}.`}
+                      </>
+                    ) : (
+                      <>
+                        {language === 'pt'
+                          ? 'Preencha os horários de "Piloto a Bordo" e "Desembarque do Piloto" para alimentar a escala de fadiga.'
+                          : 'Fill in Pilot On Board and Disembarkation times to feed fatigue algorithms.'}
+                      </>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
+                <div className="text-right">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 block">
+                    {language === 'pt' ? 'Tempo de Serviço' : 'Duty Hours'}
+                  </span>
+                  <span className="text-base sm:text-lg font-black text-blue-950">
+                    {pilotDuty.formatted !== '--' ? pilotDuty.formatted : '--'}
+                  </span>
+                </div>
+                <div className={`px-2.5 py-1 rounded-md text-xs font-bold border ${
+                  pilotDuty.hours <= 4
+                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                    : pilotDuty.hours <= 6
+                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                    : 'bg-red-100 text-red-900 border-red-300'
+                }`}>
+                  {pilotDuty.hours === 0 ? (language === 'pt' ? 'Aguardando horários' : 'Awaiting times') :
+                    pilotDuty.hours <= 4 ? (language === 'pt' ? 'Fadiga Baixa' : 'Low Fatigue') :
+                    pilotDuty.hours <= 6 ? (language === 'pt' ? 'Fadiga Moderada' : 'Moderate Fatigue') :
+                    (language === 'pt' ? 'Fadiga Elevada (STCW)' : 'High Fatigue (STCW)')}
+                </div>
               </div>
             </div>
 
@@ -835,40 +1181,40 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  MODELO DE ATRACAÇÃO *
+                  {language === 'pt' ? 'MODELO DE ATRACAÇÃO *' : 'BERTHING MODEL *'}
                 </label>
                 <select
                   value={berthingModel}
                   onChange={(e) => setBerthingModel(e.target.value as BerthingModel)}
                   className="w-full bg-white border-2 border-black rounded px-3 py-2 text-sm font-bold text-black"
                 >
-                  <option value="Costado Bombordo (BB)">Costado de Bombordo (BB)</option>
-                  <option value="Costado Boreste (BE)">Costado de Boreste (BE)</option>
-                  <option value="Mediterrânea (Popa)">Mediterrânea (Popa ao Cais)</option>
-                  <option value="Amarras / Bóias">Amarras / Bóias de Amarração</option>
-                  <option value="Dolphin / Terminal">Dolphin / Terminal Flutuante</option>
+                  <option value="Costado Bombordo (BB)">{language === 'pt' ? 'Costado de Bombordo (BB)' : 'Port Side (BB)'}</option>
+                  <option value="Costado Boreste (BE)">{language === 'pt' ? 'Costado de Boreste (BE)' : 'Starboard Side (BE)'}</option>
+                  <option value="Mediterrânea (Popa)">{language === 'pt' ? 'Mediterrânea (Popa ao Cais)' : 'Mediterranean (Stern-to)'}</option>
+                  <option value="Amarras / Bóias">{language === 'pt' ? 'Amarras / Bóias de Amarração' : 'Buoy / Mooring Lines'}</option>
+                  <option value="Dolphin / Terminal">{language === 'pt' ? 'Dolphin / Terminal Flutuante' : 'Dolphin / Offshore'}</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  BERÇO / CAIS DESTINADO
+                  {language === 'pt' ? 'BERÇO / CAIS DESTINADO' : 'ASSIGNED BERTH / QUAY'}
                 </label>
                 <input
                   type="text"
                   value={berthTo}
                   onChange={(e) => setBerthTo(e.target.value)}
-                  placeholder="Ex: Berço 101 ou Cais Norte"
+                  placeholder={language === 'pt' ? 'Ex: Berço 101 ou Cais Norte' : 'e.g. Berth 101 or North Quay'}
                   className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1 flex items-center justify-between">
-                  <span>PRÁTICO RESPONSÁVEL *</span>
+                  <span>{language === 'pt' ? 'PRÁTICO RESPONSÁVEL *' : 'LEAD PILOT *'}</span>
                   {currentUser && pilotId === currentUser.id && (
                     <span className="text-[10px] text-blue-800 font-bold bg-blue-100 px-1.5 py-0.2 rounded">
-                      Seu Perfil Ativo
+                      {language === 'pt' ? 'Seu Perfil Ativo' : 'Active Profile'}
                     </span>
                   )}
                 </label>
@@ -883,7 +1229,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                 >
                   {currentUser && (
                     <option value={currentUser.id}>
-                      ★ {currentUser.name} ({currentUser.rank}) [Você]
+                      ★ {currentUser.name} ({currentUser.rank}) [{language === 'pt' ? 'Você' : 'You'}]
                     </option>
                   )}
                   {pilots
@@ -894,24 +1240,29 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                       </option>
                     ))}
                   {pilots.length === 0 && !currentUser && (
-                    <option value="">Nenhum prático registado</option>
+                    <option value="">{language === 'pt' ? 'Nenhum prático registado' : 'No pilot registered'}</option>
                   )}
                 </select>
               </div>
             </div>
           </div>
 
-          {/* REBOCADORES & TEMPO DE ASSISTÊNCIA (ARRANQUE, INÍCIO, FIM) */}
-          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4">
-            <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2 border-b border-slate-200 pb-2">
-              <Anchor className="w-4 h-4 text-blue-700" />
-              3. REBOCADORES & TEMPO DE ASSISTÊNCIA
-            </h3>
+          {/* REBOCADORES & HORÁRIO DE OPERAÇÕES (DESDE QUE ENCOSTAM ATÉ SEREM DISPENSADOS) */}
+          <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-black uppercase text-blue-900 flex items-center gap-2">
+                <Anchor className="w-4 h-4 text-blue-700" />
+                3. {language === 'pt' ? 'REBOCADORES & HORÁRIO DE OPERAÇÕES' : 'TUGS & OPERATIONAL TIMINGS'}
+              </h3>
+              <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
+                {language === 'pt' ? 'Operações: Encostamento até Dispensa' : 'Operations: Made Fast to Dismissal'}
+              </span>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  NÚMERO DE REBOCADORES
+                  {language === 'pt' ? 'NÚMERO DE REBOCADORES' : 'NUMBER OF TUGS'}
                 </label>
                 <div className="flex gap-1">
                   {[0, 1, 2, 3, 4].map(num => (
@@ -921,7 +1272,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                       onClick={() => setTugsCount(num)}
                       className={`flex-1 py-2 rounded font-black text-sm border-2 transition-all ${
                         tugsCount === num
-                          ? 'bg-blue-900 text-white border-black'
+                          ? 'bg-blue-900 text-white border-black shadow-xs'
                           : 'bg-white text-slate-800 border-slate-300 hover:bg-blue-50'
                       }`}
                     >
@@ -933,7 +1284,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  ARRANQUE (SAÍDA DA BASE)
+                  {language === 'pt' ? 'ARRANQUE (SAÍDA DA BASE)' : 'DEPARTURE (BASE OUT)'}
                 </label>
                 <input
                   type="time"
@@ -945,26 +1296,72 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  INÍCIO (ASSISTÊNCIA / CABOS)
+                  {language === 'pt' ? 'ENCOSTAM (FEITOS AO NAVIO) *' : 'MADE FAST (TUGS IN) *'}
                 </label>
-                <input
-                  type="time"
-                  value={tugInicio}
-                  onChange={(e) => setTugInicio(e.target.value)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                />
+                <div className="flex gap-1.5">
+                  <input
+                    type="time"
+                    value={tugInicio}
+                    onChange={(e) => setTugInicio(e.target.value)}
+                    className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTugInicio(new Date().toTimeString().slice(0, 5))}
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                  >
+                    {language === 'pt' ? 'Agora' : 'Now'}
+                  </button>
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  FIM (LIBERAÇÃO)
+                  {language === 'pt' ? 'DISPENSADOS (LARGADOS) *' : 'DISMISSED (CAST OFF) *'}
                 </label>
-                <input
-                  type="time"
-                  value={tugFim}
-                  onChange={(e) => setTugFim(e.target.value)}
-                  className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black"
-                />
+                <div className="flex gap-1.5">
+                  <input
+                    type="time"
+                    value={tugFim}
+                    onChange={(e) => setTugFim(e.target.value)}
+                    className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTugFim(new Date().toTimeString().slice(0, 5))}
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 border border-slate-400 rounded font-semibold text-black"
+                  >
+                    {language === 'pt' ? 'Agora' : 'Now'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* CÁLCULO DE HORÁRIO DE OPERAÇÕES DE REBOCADORES */}
+            <div className="bg-slate-50 border border-slate-300 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-md bg-slate-800 text-white flex items-center justify-center shrink-0">
+                  <Clock className="w-4 h-4 text-blue-300" />
+                </div>
+                <div>
+                  <span className="text-xs font-black uppercase text-slate-900 block">
+                    {language === 'pt' ? 'Horário de Operações de Rebocadores' : 'Tug Operational Period'}
+                  </span>
+                  <span className="text-[11px] text-slate-600">
+                    {language === 'pt' 
+                      ? 'Cálculo desde o encostamento ao navio até serem dispensados'
+                      : 'Calculated from tugs made fast until dismissed'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-slate-600 font-semibold">
+                  {tugInicio && tugFim ? `${tugInicio} → ${tugFim}` : '--:-- → --:--'}
+                </span>
+                <span className="bg-blue-900 text-white font-black text-xs px-2.5 py-1 rounded shadow-xs">
+                  {tugOperations.formatted !== '--' ? tugOperations.formatted : (language === 'pt' ? 'Sem registro' : 'No record')}
+                </span>
               </div>
             </div>
           </div>
@@ -1124,7 +1521,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
             </div>
           </div>
         </form>
-      </div>
+      </motion.div>
     </div>
   );
 };

@@ -57,8 +57,11 @@ export type BerthingModel =
 
 export interface TugAssistanceTimings {
   arranque?: string; // Horário de saída / mobilização
-  inicio?: string;   // Horário de início do trabalho com cabos
-  fim?: string;      // Horário de término da assistência
+  inicio?: string;   // Horário em que os rebocadores encostam / feitos ao navio (Tugs Made Fast)
+  fim?: string;      // Horário em que os rebocadores são dispensados / largados (Tugs Dismissed)
+  tugsMadeFast?: string; // Horário de encostamento (Tugs Made Fast)
+  tugsDismissed?: string; // Horário de dispensa (Tugs Dismissed)
+  operatingHours?: number; // Horário de operações (duração desde que encostam até serem dispensados)
 }
 
 export interface TugAssistance {
@@ -98,12 +101,14 @@ export interface SafetyChecklist {
 
 export interface TimeMilestones {
   boardingPilotBoat?: string; // Saída da lancha / Embarque
-  pilotOnBoard?: string; // Piloto a bordo (Início de assessoria)
+  pilotOnBoard?: string; // Piloto a bordo (Início de assessoria / POB)
+  lastLineCastOff?: string; // Último cabo largado / Desamarrado (All Clear)
   commenceManeuver?: string; // Largar ferro ou soltar amarras
-  tugsConnected?: string; // Rebocadores passados
+  tugsConnected?: string; // Rebocadores encostados / feitos (Tugs Made Fast)
+  tugsReleased?: string; // Rebocadores dispensados / largados (Tugs Dismissed)
   firstLineAshored?: string; // Primeiro cabo em terra
-  allFastCompleted?: string; // Amarrado e finalizado
-  pilotDisembarked?: string; // Desembarque do piloto
+  allFastCompleted?: string; // Amarrado e finalizado (Atracado / All Fast)
+  pilotDisembarked?: string; // Desembarque do piloto (Pilot Away)
 }
 
 export interface IncidentRecord {
@@ -157,12 +162,20 @@ export interface ManeuverRecord {
   durationMinutes?: number;
   maneuverDurationFormatted?: string; // e.g. "1h 35m"
   
-  // Pilot Specific Inputs
-  firstLineAshored?: string; // PRIMEIRO CABO
-  unmooringTime?: string;    // DESATRACAÇÃO
-  berthingTime?: string;      // ATRACAÇÃO
+  // Pilot Specific Inputs & Operational Milestones
+  maneuverDate?: string;      // DATA DA MANOBRA (Permite registo e alteração retroativa)
+  pilotOnBoardTime?: string;  // PILOTO A BORDO (POB)
+  lastLineCastOffTime?: string; // ÚLTIMO CABO LARGADO (ALL CLEAR)
+  firstLineAshored?: string;  // PRIMEIRO CABO EM TERRA (FIRST LINE)
+  berthingTime?: string;      // ATRACAÇÃO / AMARRADO (ALL FAST)
+  pilotDisembarkedTime?: string; // DESEMBARQUE DO PILOTO (PILOT AWAY)
+  unmooringTime?: string;     // DESATRACAÇÃO
   berthingModel?: BerthingModel; // MODELO DE ATRACAÇÃO
   tugCount?: number;          // NÚMERO DE REBOCADORES
+  tugsMadeFastTime?: string;  // REBOCADORES ENCOSTADOS AO NAVIO
+  tugsDismissedTime?: string; // REBOCADORES DISPENSADOS
+  tugOperationalHours?: number; // HORÁRIO OPERACIONAL DOS REBOCADORES (ENCOSTADOS ATÉ DISPENSADOS)
+  pilotDutyHours?: number;    // TEMPO DE SERVIÇO DO PILOTO (EMBARQUE AO DESEMBARQUE PARA FADIGA)
   tugTimings?: TugAssistanceTimings; // TEMPO DE ASSISTÊNCIA (ARRANQUE, INÍCIO, FIM)
   
   tugs: TugAssistance[];

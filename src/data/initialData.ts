@@ -72,29 +72,29 @@ export const INITIAL_MANEUVERS: ManeuverRecord[] = [];
 export const INITIAL_ALERTS: MaritimeAlert[] = [
   {
     id: 'alt-001',
-    title: 'Restrição de Vento - Entrada no Canal da Barra',
+    title: 'Restrição de Vento - Entrada no Canal da Barra (Canal Macuti)',
     category: 'meteorologico',
     severity: 'alta',
-    location: 'Canal de Acesso / Barra Externa',
-    description: 'Rajadas previstas acima de 25 nós entre as 14:00 e as 19:00. Manobras de navios porta-contentores com LOA > 300m exigem 2 rebocadores de escolta.',
+    location: 'Canal de Acesso Macuti / Barra da Beira',
+    description: 'Rajadas previstas acima de 25 nós entre as 14:00 e as 19:00. Manobras de navios com LOA > 250m no canal exigem 2 rebocadores ASD de escolta.',
     isActive: true,
-    issuedBy: 'Capitania dos Portos / VTS',
+    issuedBy: 'INAMAR / Capitania do Porto da Beira',
     issuedAt: new Date().toISOString(),
     validUntil: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-    actionRequired: 'Verificar prontidão de rebocadores com tração estática > 65T antes do embarque.'
+    actionRequired: 'Verificar prontidão de rebocadores com tração estática > 60T antes do embarque na bóia P.'
   },
   {
     id: 'alt-002',
-    title: 'Trabalhos de Dragagem Hidrográfica',
+    title: 'Trabalhos de Dragagem Hidrográfica no Canal',
     category: 'canal_navegacao',
     severity: 'media',
-    location: 'Trecho do Berço 102 ao Berço 103',
-    description: 'Draga autotransportadora operando no alinhamento das bóias 06 e 08. Velocidade máxima autorizada no canal reduzida para 6 nós.',
+    location: 'Alinhamento do Berço 2 ao Berço 5',
+    description: 'Draga autotransportadora da EMODRAGA operando no canal. Velocidade máxima autorizada no canal reduzida para 6 nós.',
     isActive: true,
-    issuedBy: 'Administração Portuária',
+    issuedBy: 'CFM - Portos e Caminhos de Ferro de Moçambique',
     issuedAt: new Date(Date.now() - 12 * 3600 * 1000).toISOString(),
     validUntil: new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
-    actionRequired: 'Estabelecer contacto de segurança em VHF Ch 12 com a draga a 1 milha de distância.'
+    actionRequired: 'Estabelecer contacto de segurança em VHF Ch 12 ou 16 com o serviço de pilotagem.'
   }
 ];
 

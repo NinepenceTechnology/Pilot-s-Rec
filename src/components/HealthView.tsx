@@ -135,20 +135,27 @@ export const HealthView: React.FC = () => {
       return hour >= 20 || hour < 6;
     });
 
-    // Estimate bridge hours underway in last 24h
+    // Calculate bridge duty hours in last 24h: from pilot boarding (POB) to disembarkation
     let bridgeHours24h = 0;
     maneuvers24h.forEach(m => {
-      if (m.durationMinutes) {
+      if (typeof m.pilotDutyHours === 'number' && m.pilotDutyHours > 0) {
+        bridgeHours24h += m.pilotDutyHours;
+      } else if (m.pilotOnBoardTime && m.pilotDisembarkedTime) {
+        const [sh, sm] = m.pilotOnBoardTime.split(':').map(Number);
+        const [eh, em] = m.pilotDisembarkedTime.split(':').map(Number);
+        let diffHours = (eh * 60 + em - (sh * 60 + sm)) / 60;
+        if (diffHours < 0) diffHours += 24;
+        bridgeHours24h += diffHours;
+      } else if (m.durationMinutes) {
         bridgeHours24h += m.durationMinutes / 60;
       } else if (m.unmooringTime && m.berthingTime) {
         const [sh, sm] = m.unmooringTime.split(':').map(Number);
         const [eh, em] = m.berthingTime.split(':').map(Number);
         let diffHours = (eh * 60 + em - (sh * 60 + sm)) / 60;
-        if (diffHours < 0) diffHours += 24; // Crosses midnight
+        if (diffHours < 0) diffHours += 24;
         bridgeHours24h += Math.max(0.5, diffHours);
       } else {
-        // Average maneuver is 2.5 hours
-        bridgeHours24h += 2.5;
+        bridgeHours24h += 2.0;
       }
     });
 
@@ -520,14 +527,29 @@ export const HealthView: React.FC = () => {
               <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
                 <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <Ship className="w-4 h-4 text-cyan-800" />
-                  {isPt ? 'Manobras Recentes do Piloto nas Últimas 24 Horas:' : 'Pilot Maneuvers in the Last 24 Hours:'}
+                  {isPt ? 'Manobras do Piloto nas Últimas 24 Horas (Tempo de Embarque a Desembarque):' : 'Pilot Maneuvers in Last 24 Hours (Boarding to Disembarkation Time):'}
                 </span>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                   {activeFatigueData.recentManeuversList.map(m => (
-                    <div key={m.id} className="flex items-center justify-between text-xs bg-white p-2 rounded-lg border border-slate-200 font-mono">
-                      <span className="font-bold text-blue-900">{m.vesselSnapshot?.name || m.vesselId}</span>
-                      <span className="text-slate-600">{m.maneuverType.toUpperCase()} · {m.unmooringTime || m.berthingTime || 'Horário de Escala'}</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-bold">{m.status}</span>
+                    <div key={m.id} className="flex flex-col sm:flex-row sm:items-center justify-between text-xs bg-white p-2.5 rounded-lg border border-slate-200 font-mono gap-1.5">
+                      <div>
+                        <span className="font-bold text-blue-900 block">{m.vesselSnapshot?.name || m.vesselId}</span>
+                        <span className="text-[11px] text-slate-600">
+                          {m.maneuverType.toUpperCase()} {m.maneuverDate ? `· ${m.maneuverDate}` : ''} {m.berthingModel ? `· ${m.berthingModel}` : ''}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {m.pilotOnBoardTime && m.pilotDisembarkedTime ? (
+                          <span className="text-[11px] bg-blue-50 text-blue-900 px-2 py-0.5 rounded border border-blue-200 font-bold">
+                            POB {m.pilotOnBoardTime} &rarr; Desembarque {m.pilotDisembarkedTime} {m.pilotDutyHours ? `(${m.pilotDutyHours}h)` : ''}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">
+                            {m.unmooringTime || m.berthingTime || 'Horário de Escala'} {m.durationMinutes ? `(${m.durationMinutes} min)` : ''}
+                          </span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-bold">{m.status}</span>
+                      </div>
                     </div>
                   ))}
                 </div>

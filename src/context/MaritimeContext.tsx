@@ -65,6 +65,14 @@ interface MaritimeContextType {
   registerUser: (profile: Omit<UserPilotProfile, 'id' | 'registeredAt'>) => void;
   updateUserProfile: (updates: Partial<UserPilotProfile>) => void;
   logoutUser: () => void;
+  syncStatusMessage: string | null;
+  clearSyncStatusMessage: () => void;
+  registeredPilotNames: string[];
+  checkPilotBackupExists: (name: string) => boolean;
+  getPilotBackupSummary: (name: string) => { exists: boolean; maneuverCount: number; lastSync?: string };
+  exportPilotBackup: (pilotName?: string) => void;
+  restorePilotBackup: (backupData: any) => boolean;
+  switchPilotByName: (name: string) => boolean;
   
   // Actions
   addManeuver: (maneuver: Omit<ManeuverRecord, 'id' | 'createdAt' | 'updatedAt'>) => string;
@@ -106,6 +114,13 @@ const STORAGE_KEYS = {
   USER_PROFILE: 'pilots_records_user_profile_v2'
 };
 
+const PILOT_BACKUP_PREFIX = 'pilots_records_pilot_backup_v2_';
+const REGISTERED_PILOTS_KEY = 'pilots_records_registered_pilots_list_v2';
+
+export const normalizePilotKey = (name: string): string => {
+  return name.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+};
+
 // Purge any pre-existing v1 mock data from browser localStorage to start cleanly from zero
 try {
   ['pilots_records_vessels_v1', 'pilots_records_maneuvers_v1', 'pilots_records_pilots_v1', 'pilots_records_shifts_v1', 'pilots_records_weather_v1'].forEach(k => {
@@ -140,6 +155,30 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [selectedManeuverId, setSelectedManeuverId] = useState<string | null>(null);
   const [activePilotId, setActivePilotId] = useState<string>('');
+  const [syncStatusMessage, setSyncStatusMessage] = useState<string | null>(null);
+  const clearSyncStatusMessage = () => setSyncStatusMessage(null);
+
+  const [registeredPilotNames, setRegisteredPilotNames] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(REGISTERED_PILOTS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const addNameToRegisteredPilots = (name: string) => {
+    const clean = name.trim();
+    if (!clean) return;
+    setRegisteredPilotNames(prev => {
+      const exists = prev.some(n => normalizePilotKey(n) === normalizePilotKey(clean));
+      if (exists) return prev;
+      const updated = [...prev, clean];
+      try {
+        localStorage.setItem(REGISTERED_PILOTS_KEY, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
 
   // Load logged-in pilot / user profile
   const [currentUser, setCurrentUser] = useState<UserPilotProfile | null>(() => {
@@ -276,6 +315,29 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.error(e);
     }
   }, [weather]);
+
+  // Continuous Pilot Backup Synchronization (Specific to Active Pilot)
+  useEffect(() => {
+    if (!currentUser?.name) return;
+    const key = `${PILOT_BACKUP_PREFIX}${normalizePilotKey(currentUser.name)}`;
+    const backupData = {
+      pilotName: currentUser.name,
+      licenseNumber: currentUser.licenseNumber,
+      rank: currentUser.rank,
+      phone: currentUser.phone,
+      vhfCallSign: currentUser.vhfCallSign,
+      savedAt: new Date().toISOString(),
+      maneuvers,
+      vessels,
+      alerts,
+      shifts
+    };
+    try {
+      localStorage.setItem(key, JSON.stringify(backupData));
+    } catch (e) {
+      console.error('Auto backup failed', e);
+    }
+  }, [maneuvers, vessels, alerts, shifts, currentUser]);
 
   const addManeuver = (maneuverData: Omit<ManeuverRecord, 'id' | 'createdAt' | 'updatedAt'>): string => {
     const sequenceNumber = maneuvers.length + 1;
@@ -415,41 +477,227 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return newId;
   };
 
-  const registerUser = (profileData: Omit<UserPilotProfile, 'id' | 'registeredAt'>) => {
-    const newId = `plt-user-${Date.now().toString().slice(-4)}`;
-    const fullProfile: UserPilotProfile = {
-      ...profileData,
-      id: newId,
-      registeredAt: new Date().toISOString()
-    };
-    setCurrentUser(fullProfile);
-    setActivePilotId(newId);
+  const checkPilotBackupExists = (name: string): boolean => {
+    if (!name || !name.trim()) return false;
+    const key = `${PILOT_BACKUP_PREFIX}${normalizePilotKey(name)}`;
+    return !!localStorage.getItem(key);
+  };
+
+  const getPilotBackupSummary = (name: string) => {
+    if (!name || !name.trim()) return { exists: false, maneuverCount: 0 };
+    const key = `${PILOT_BACKUP_PREFIX}${normalizePilotKey(name)}`;
     try {
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(fullProfile));
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          exists: true,
+          maneuverCount: Array.isArray(parsed.maneuvers) ? parsed.maneuvers.length : 0,
+          lastSync: parsed.savedAt
+        };
+      }
+    } catch {}
+    return { exists: false, maneuverCount: 0 };
+  };
+
+  const exportPilotBackup = (pilotName?: string) => {
+    const targetName = pilotName || currentUser?.name;
+    if (!targetName) return;
+    const normKey = normalizePilotKey(targetName);
+    const key = `${PILOT_BACKUP_PREFIX}${normKey}`;
+    let dataToExport: any = null;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) dataToExport = JSON.parse(raw);
+    } catch {}
+    if (!dataToExport) {
+      dataToExport = {
+        pilotName: targetName,
+        licenseNumber: currentUser?.licenseNumber || '',
+        rank: currentUser?.rank || 'Piloto Sênior',
+        phone: currentUser?.phone || '',
+        vhfCallSign: currentUser?.vhfCallSign || '',
+        maneuvers: maneuvers.filter(m => normalizePilotKey(m.pilotName) === normKey),
+        vessels,
+        alerts,
+        shifts,
+        savedAt: new Date().toISOString()
+      };
+    }
+    const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Backup_Piloto_${targetName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const restorePilotBackup = (backupData: any): boolean => {
+    try {
+      if (!backupData || !backupData.pilotName) return false;
+      const targetName = String(backupData.pilotName).trim();
+      const normKey = normalizePilotKey(targetName);
+      const key = `${PILOT_BACKUP_PREFIX}${normKey}`;
+      localStorage.setItem(key, JSON.stringify(backupData));
+      addNameToRegisteredPilots(targetName);
+
+      if (Array.isArray(backupData.maneuvers)) setManeuvers(backupData.maneuvers);
+      if (Array.isArray(backupData.vessels) && backupData.vessels.length > 0) setVessels(backupData.vessels);
+      if (Array.isArray(backupData.alerts)) setAlerts(backupData.alerts);
+      if (Array.isArray(backupData.shifts)) setShifts(backupData.shifts);
+
+      const userProfile: UserPilotProfile = {
+        id: `plt-${normKey}`,
+        name: targetName,
+        rank: backupData.rank || 'Piloto Sênior',
+        licenseNumber: backupData.licenseNumber || '',
+        phone: backupData.phone || '',
+        vhfCallSign: backupData.vhfCallSign || '',
+        registeredAt: backupData.savedAt || new Date().toISOString()
+      };
+      setCurrentUser(userProfile);
+      setActivePilotId(userProfile.id);
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(userProfile));
+      setSyncStatusMessage(`Cópia de segurança do piloto "${targetName}" restaurada e dados sincronizados com sucesso.`);
+      return true;
+    } catch (e) {
+      console.error('Erro ao restaurar backup de piloto:', e);
+      return false;
+    }
+  };
+
+  const switchPilotByName = (targetName: string): boolean => {
+    if (!targetName || !targetName.trim()) return false;
+    const cleanName = targetName.trim();
+    const normKey = normalizePilotKey(cleanName);
+    const key = `${PILOT_BACKUP_PREFIX}${normKey}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const backup = JSON.parse(raw);
+        if (Array.isArray(backup.maneuvers)) setManeuvers(backup.maneuvers);
+        if (Array.isArray(backup.vessels) && backup.vessels.length > 0) setVessels(backup.vessels);
+        if (Array.isArray(backup.alerts)) setAlerts(backup.alerts);
+        if (Array.isArray(backup.shifts)) setShifts(backup.shifts);
+
+        const profile: UserPilotProfile = {
+          id: `plt-${normKey}`,
+          name: cleanName,
+          rank: backup.rank || 'Piloto Sênior',
+          licenseNumber: backup.licenseNumber || '',
+          phone: backup.phone || '',
+          vhfCallSign: backup.vhfCallSign || '',
+          registeredAt: backup.savedAt || new Date().toISOString()
+        };
+        setCurrentUser(profile);
+        setActivePilotId(profile.id);
+        localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+        setSyncStatusMessage(`Sessão ativa alterada para o piloto "${cleanName}". Todos os dados foram sincronizados.`);
+        return true;
+      }
     } catch (e) {
       console.error(e);
     }
+    return false;
+  };
 
-    // Automatically synchronize or add into the pilots roster
+  const registerUser = (profileData: Omit<UserPilotProfile, 'id' | 'registeredAt'>) => {
+    const rawName = profileData.name.trim();
+    const normKey = normalizePilotKey(rawName);
+    const backupKey = `${PILOT_BACKUP_PREFIX}${normKey}`;
+    const existingBackupStr = localStorage.getItem(backupKey);
+
+    addNameToRegisteredPilots(rawName);
+
+    if (existingBackupStr) {
+      // 1. NOME TAXATIVAMENTE IGUAL: Sincroniza dados e histórico do piloto existente!
+      try {
+        const backupData = JSON.parse(existingBackupStr);
+        if (Array.isArray(backupData.maneuvers)) {
+          setManeuvers(backupData.maneuvers);
+        }
+        if (Array.isArray(backupData.vessels) && backupData.vessels.length > 0) {
+          setVessels(backupData.vessels);
+        }
+        if (Array.isArray(backupData.alerts) && backupData.alerts.length > 0) {
+          setAlerts(backupData.alerts);
+        }
+        if (Array.isArray(backupData.shifts) && backupData.shifts.length > 0) {
+          setShifts(backupData.shifts);
+        }
+
+        const fullProfile: UserPilotProfile = {
+          ...profileData,
+          name: rawName,
+          id: `plt-${normKey}`,
+          licenseNumber: profileData.licenseNumber || backupData.licenseNumber || '',
+          rank: profileData.rank || backupData.rank || 'Piloto Sênior',
+          phone: profileData.phone || backupData.phone || '',
+          vhfCallSign: profileData.vhfCallSign || backupData.vhfCallSign || '',
+          registeredAt: backupData.savedAt || new Date().toISOString()
+        };
+        setCurrentUser(fullProfile);
+        setActivePilotId(fullProfile.id);
+        localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(fullProfile));
+        setSyncStatusMessage(`Piloto reconhecido taxativamente! Dados e histórico de manobras de "${rawName}" sincronizados com sucesso a partir do backup.`);
+      } catch (e) {
+        console.error('Erro na sincronização de dados do piloto:', e);
+      }
+    } else {
+      // 2. DADOS DIFERENTES / NOVO UTILIZADOR: Perfil isolado e novo backup gerado
+      const newId = `plt-${normKey}`;
+      const fullProfile: UserPilotProfile = {
+        ...profileData,
+        name: rawName,
+        id: newId,
+        registeredAt: new Date().toISOString()
+      };
+      setCurrentUser(fullProfile);
+      setActivePilotId(newId);
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(fullProfile));
+
+      // Guardar backup inicial limpo para este piloto
+      const initialBackup = {
+        pilotName: rawName,
+        licenseNumber: profileData.licenseNumber,
+        rank: profileData.rank,
+        phone: profileData.phone,
+        vhfCallSign: profileData.vhfCallSign,
+        maneuvers: [],
+        vessels: vessels,
+        alerts: alerts,
+        shifts: shifts,
+        savedAt: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem(backupKey, JSON.stringify(initialBackup));
+      } catch (e) {
+        console.error(e);
+      }
+      setSyncStatusMessage(`Novo utilizador detetado. Perfil isolado e cópia de segurança dedicada criada para "${rawName}".`);
+    }
+
+    // Atualizar roster de pilotos geral
     setPilots(prev => {
-      const existing = prev.find(p => p.id === newId || p.name.trim().toLowerCase() === fullProfile.name.trim().toLowerCase());
+      const existing = prev.find(p => normalizePilotKey(p.name) === normKey);
       if (existing) {
         return prev.map(p => p.id === existing.id ? {
           ...p,
-          name: fullProfile.name,
-          category: fullProfile.rank,
-          licenseNumber: fullProfile.licenseNumber,
-          phone: fullProfile.phone || p.phone,
-          vhfCallSign: fullProfile.vhfCallSign || p.vhfCallSign
+          name: rawName,
+          category: profileData.rank,
+          licenseNumber: profileData.licenseNumber,
+          phone: profileData.phone || p.phone,
+          vhfCallSign: profileData.vhfCallSign || p.vhfCallSign
         } : p);
       }
       const newPilotItem: Pilot = {
-        id: newId,
-        name: fullProfile.name,
-        licenseNumber: fullProfile.licenseNumber,
-        category: fullProfile.rank,
-        phone: fullProfile.phone || '',
-        vhfCallSign: fullProfile.vhfCallSign || `Prático ${fullProfile.name.split(' ').pop() || 'Serviço'}`,
+        id: `plt-${normKey}`,
+        name: rawName,
+        licenseNumber: profileData.licenseNumber,
+        category: profileData.rank,
+        phone: profileData.phone || '',
+        vhfCallSign: profileData.vhfCallSign || `Prático ${rawName.split(' ').pop() || 'Serviço'}`,
         status: 'de_servico',
         currentShift: 'Manhã/Tarde (08h-16h)',
         completedManeuversCount: 0,
@@ -714,6 +962,14 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         registerUser,
         updateUserProfile,
         logoutUser,
+        syncStatusMessage,
+        clearSyncStatusMessage,
+        registeredPilotNames,
+        checkPilotBackupExists,
+        getPilotBackupSummary,
+        exportPilotBackup,
+        restorePilotBackup,
+        switchPilotByName,
         addManeuver,
         updateManeuver,
         deleteManeuver,

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { 
   X, 
   Anchor, 
@@ -68,7 +69,13 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto transition-opacity duration-200">
-      <div className="bg-white border-2 border-black rounded-xl max-w-3xl w-full shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh] text-slate-900 animate-in fade-in zoom-in-95 duration-200">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 12 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+        className="bg-white border-2 border-black rounded-xl max-w-3xl w-full shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh] text-slate-900"
+      >
         
         {/* Header - White & Naval Blue with Black Accents */}
         <div className="bg-blue-900 text-white px-5 py-4 border-b-2 border-black flex items-center justify-between">
@@ -345,7 +352,7 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
           </div>
         </div>
 
-      </div>
+      </motion.div>
     </div>
   );
 };

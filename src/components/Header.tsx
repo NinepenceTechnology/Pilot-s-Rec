@@ -98,13 +98,16 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNewManeuverModal }) => {
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Top-Right Language Switcher Button (PT <-> EN) */}
           <button
+            id="top-language-switcher"
             onClick={() => setLanguage(language === 'pt' ? 'en' : 'pt')}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/80 font-mono font-bold text-xs transition-all active:scale-95 shadow-sm cursor-pointer select-none"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-950 hover:bg-cyan-900 active:scale-95 text-cyan-300 border-2 border-cyan-400 font-mono font-bold text-xs transition-all shadow-sm cursor-pointer select-none touch-manipulation"
             title={language === 'pt' ? 'Alterar para Inglês (Switch to English)' : 'Mudar para Português (Switch to Portuguese)'}
           >
-            <Globe className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="font-black text-white">{language === 'pt' ? '🇵🇹 PT' : '🇬🇧 EN'}</span>
-            <span className="text-[10px] text-cyan-400/80 font-normal">({language === 'pt' ? 'EN' : 'PT'})</span>
+            <Globe className="w-4 h-4 text-cyan-400 shrink-0" />
+            <span className="font-black text-white text-xs">{language === 'pt' ? '🇵🇹 PT' : '🇬🇧 EN'}</span>
+            <span className="text-[10px] text-cyan-300 font-bold bg-cyan-900/90 px-1.5 py-0.5 rounded border border-cyan-700/60 hidden xs:inline">
+              {language === 'pt' ? 'MUDAR' : 'SWITCH'}
+            </span>
           </button>
 
           {/* Active Logged-in Pilot Profile */}
@@ -194,30 +197,32 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNewManeuverModal }) => {
         </div>
 
         {/* Primary Navigation Buttons (Responsive: works smoothly on Tablets, Computers and Large screens without overlapping) */}
-        <nav className="flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth py-1 -mx-1 px-1">
+        <nav className="flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth py-1 -mx-1 px-1">
           {/* Tela Inicial / Dashboard */}
           <button
+            id="nav-dashboard"
             onClick={() => setCurrentView('dashboard')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'dashboard'
-                ? 'bg-slate-950 text-cyan-400 border-slate-950 shadow-sm ring-1 ring-cyan-500/30'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-cyan-400 border-slate-950 shadow-sm ring-2 ring-cyan-500/40'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <LayoutDashboard className="w-4 h-4 text-cyan-500" />
+            <LayoutDashboard className="w-4 h-4 text-cyan-500 shrink-0" />
             <span>{isPt ? 'Início' : 'Home'}</span>
           </button>
 
           {/* 1. REGISTO DE OPERAÇÃO (Clean without btn) */}
           <button
+            id="nav-operacoes"
             onClick={() => setCurrentView('operacoes')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'operacoes'
-                ? 'bg-slate-950 text-white border-slate-950 shadow-sm ring-1 ring-blue-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-white border-slate-950 shadow-sm ring-2 ring-blue-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <BookOpen className="w-4 h-4 text-blue-600" />
+            <BookOpen className="w-4 h-4 text-blue-600 shrink-0" />
             <span>{isPt ? 'Operações' : 'Operations'}</span>
             {activeCount > 0 && (
               <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black">
@@ -228,27 +233,29 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNewManeuverModal }) => {
 
           {/* 2. SAÚDE & FADIGA (Clean without btn) */}
           <button
+            id="nav-saude"
             onClick={() => setCurrentView('saude')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'saude'
-                ? 'bg-slate-950 text-rose-300 border-slate-950 shadow-sm ring-1 ring-rose-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-rose-300 border-slate-950 shadow-sm ring-2 ring-rose-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <Heart className="w-4 h-4 text-rose-500" />
+            <Heart className="w-4 h-4 text-rose-500 shrink-0" />
             <span>{isPt ? 'Saúde & Fadiga' : 'Health & Fatigue'}</span>
           </button>
 
           {/* 3. ALERTA (Clean without btn) */}
           <button
+            id="nav-alertas"
             onClick={() => setCurrentView('alertas')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'alertas'
-                ? 'bg-slate-950 text-amber-300 border-slate-950 shadow-sm ring-1 ring-amber-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-amber-300 border-slate-950 shadow-sm ring-2 ring-amber-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <Bell className={`w-4 h-4 ${activeAlertsCount > 0 ? 'text-amber-500 animate-bounce' : 'text-amber-500'}`} />
+            <Bell className={`w-4 h-4 shrink-0 ${activeAlertsCount > 0 ? 'text-amber-500 animate-bounce' : 'text-amber-500'}`} />
             <span>{isPt ? 'Alertas' : 'Alerts'}</span>
             {activeAlertsCount > 0 && (
               <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black animate-pulse">
@@ -259,48 +266,52 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNewManeuverModal }) => {
 
           {/* 4. DOCUMENTOS (Clean without btn) */}
           <button
+            id="nav-documentos"
             onClick={() => setCurrentView('relatorios')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'relatorios'
-                ? 'bg-slate-950 text-emerald-300 border-slate-950 shadow-sm ring-1 ring-emerald-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-emerald-300 border-slate-950 shadow-sm ring-2 ring-emerald-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{isPt ? 'Documentos' : 'Documents'}</span>
           </button>
 
           {/* 5. MARÉS E CÁLCULOS (Clean without btn) */}
           <button
+            id="nav-mares"
             onClick={() => setCurrentView('mares')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'mares'
-                ? 'bg-slate-950 text-cyan-300 border-slate-950 shadow-sm ring-1 ring-cyan-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-cyan-300 border-slate-950 shadow-sm ring-2 ring-cyan-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <Waves className="w-4 h-4 text-cyan-600" />
+            <Waves className="w-4 h-4 text-cyan-600 shrink-0" />
             <span>{isPt ? 'Marés & Cálculos' : 'Tides & Calc'}</span>
           </button>
 
           {/* 6. ARQUIVO (Clean without btn) */}
           <button
+            id="nav-arquivo"
             onClick={() => setCurrentView('arquivo')}
-            className={`min-h-[38px] px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border whitespace-nowrap transition-all shrink-0 cursor-pointer touch-manipulation active:scale-95 ${
               currentView === 'arquivo'
-                ? 'bg-slate-950 text-purple-300 border-slate-950 shadow-sm ring-1 ring-purple-500/40'
-                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-100'
+                ? 'bg-slate-950 text-purple-300 border-slate-950 shadow-sm ring-2 ring-purple-500/50'
+                : 'bg-white text-slate-800 border-slate-300 hover:border-slate-500 hover:bg-slate-100'
             }`}
           >
-            <FolderArchive className="w-4 h-4 text-purple-600" />
+            <FolderArchive className="w-4 h-4 text-purple-600 shrink-0" />
             <span>{isPt ? 'Arquivo' : 'Archive'}</span>
           </button>
 
           {/* Dropdown: Módulos Adicionais de Apoio */}
           <div ref={dropdownRef} className="relative shrink-0">
             <button
+              id="nav-extra-modules"
               onClick={() => setIsManagementDropdownOpen(prev => !prev)}
-              className={`min-h-[38px] px-2.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1 border transition-all cursor-pointer ${
+              className={`min-h-[42px] px-3 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border transition-all cursor-pointer touch-manipulation active:scale-95 ${
                 isGroupActive
                   ? 'bg-slate-950 text-cyan-300 border-slate-950'
                   : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'

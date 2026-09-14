@@ -98,6 +98,23 @@ export interface Translations {
   completed: string;
   scheduled: string;
   cancelled: string;
+  // Maritime Technical Milestones & Operational Terms
+  pilot_on_board: string;
+  first_line: string;
+  all_fast: string;
+  last_line: string;
+  pilot_disembarked: string;
+  berthing_model: string;
+  maneuver_date: string;
+  maneuver_date_hint: string;
+  tugs_made_fast: string;
+  tugs_dismissed: string;
+  tugs_operating_hours: string;
+  pilot_duty_duration: string;
+  type_atracacao: string;
+  type_mudanca: string;
+  type_puxanca: string;
+  type_desatracacao: string;
   save: string;
   cancel: string;
   close: string;
@@ -198,6 +215,23 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     completed: 'Concluída',
     scheduled: 'Programada',
     cancelled: 'Cancelada',
+    // Maritime Technical Milestones & Operational Terms
+    pilot_on_board: 'Piloto a Bordo (POB - Início de Assessoria)',
+    first_line: 'Primeiro Cabo em Terra (First Line)',
+    all_fast: 'Atracado & Amarrado (All Fast)',
+    last_line: 'Último Cabo Largado (All Clear / Desatracado)',
+    pilot_disembarked: 'Desembarque do Piloto (Pilot Away)',
+    berthing_model: 'Modelo de Atracação',
+    maneuver_date: 'Data da Operação / Manobra',
+    maneuver_date_hint: 'Possibilidade de registo ou alteração retroativa se a manobra não tiver sido registada no momento',
+    tugs_made_fast: 'Rebocadores Encostados / Feitos ao Navio',
+    tugs_dismissed: 'Rebocadores Dispensados / Largados',
+    tugs_operating_hours: 'Horário de Operação dos Rebocadores (Encostamento à Dispensa)',
+    pilot_duty_duration: 'Tempo de Serviço do Piloto (Embarque ao Desembarque - Cálculo de Fadiga)',
+    type_atracacao: 'Atracação (Inward / Berthing)',
+    type_mudanca: 'Mudança de Cais (Berth-to-Berth / Shifting)',
+    type_puxanca: 'Puxança ao Cais (Warping Along Berth)',
+    type_desatracacao: 'Desatracação (Outward / Unberthing)',
     save: 'Salvar Registo',
     cancel: 'Cancelar',
     close: 'Fechar',
@@ -296,6 +330,23 @@ export const TRANSLATIONS: Record<Language, Translations> = {
     completed: 'Completed',
     scheduled: 'Scheduled',
     cancelled: 'Cancelled',
+    // Maritime Technical Milestones & Operational Terms
+    pilot_on_board: 'Pilot On Board (POB - Commencement of Pilotage)',
+    first_line: 'First Line Ashore (First Line)',
+    all_fast: 'All Fast & Berthed (All Lines Secured)',
+    last_line: 'All Clear (Last Line Let Go / Unberthed)',
+    pilot_disembarked: 'Pilot Disembarked (Pilot Away)',
+    berthing_model: 'Berthing Model / Configuration',
+    maneuver_date: 'Operation / Maneuver Date',
+    maneuver_date_hint: 'Allows retroactive recording or modification if not entered during the maneuver',
+    tugs_made_fast: 'Tugs Made Fast / Alongside',
+    tugs_dismissed: 'Tugs Dismissed / Cast Off',
+    tugs_operating_hours: 'Tug Working Period (From Made Fast to Dismissed)',
+    pilot_duty_duration: 'Pilot Service Duration (POB to Disembarkation - Fatigue Engine)',
+    type_atracacao: 'Berthing (Inward / Berthing)',
+    type_mudanca: 'Shifting (Berth-to-Berth)',
+    type_puxanca: 'Warping (Along Berth Shift)',
+    type_desatracacao: 'Unberthing (Outward / Sailing)',
     save: 'Save Record',
     cancel: 'Cancel',
     close: 'Close',

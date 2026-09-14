@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Ship, 
   Search, 
@@ -7,45 +7,142 @@ import {
   X,
   ExternalLink,
   ChevronRight,
-  Globe
+  Globe,
+  Loader2
 } from 'lucide-react';
 import { useMaritime } from '../context/MaritimeContext';
 import { Vessel, VesselType } from '../types/maritime';
 import { formatVesselType, formatDateTime } from '../utils/formatters';
+import { 
+  searchVesselsWithSuggestions, 
+  fetchVesselFinderOnline, 
+  fetchVesselDetailsOnline,
+  VesselSearchResult 
+} from '../utils/vesselDatabase';
 
 interface VesselsViewProps {
   onSelectVesselForManeuver: (vessel: Vessel) => void;
 }
 
 export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeuver }) => {
-  const { vessels, maneuvers, addVessel } = useMaritime();
+  const { vessels, maneuvers, addVessel, isOnline } = useMaritime();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedVessel, setSelectedVessel] = useState<Vessel | null>(vessels[0] || null);
   const [isAddingVessel, setIsAddingVessel] = useState(false);
 
-  // Form state
+  // Auto-suggestion state for vessel creation modal
+  const [vesselSuggestions, setVesselSuggestions] = useState<VesselSearchResult[]>([]);
+  const [isSearchingOnline, setIsSearchingOnline] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const searchTimeoutRef = useRef<any>(null);
+
+  // Form state initialized with blank/zero fields (no hardcoded fake vessel data)
   const [formData, setFormData] = useState<Omit<Vessel, 'id'>>({
     name: '',
     imo: '',
     callSign: '',
-    flag: 'Panamá',
-    flagCode: 'PA',
+    flag: '',
+    flagCode: '',
     type: 'porta_conteiner',
-    loa: 220,
-    beam: 32,
-    maxDraft: 12.5,
-    currentDraftFwd: 10.2,
-    currentDraftAft: 11.0,
-    agent: 'Agência Marítima Principal',
-    origin: 'Rotterdam',
-    destination: 'Santos',
-    dwt: 45000,
-    grossTonnage: 38000,
-    terminalPreference: 'Berço 101',
-    yearBuilt: 2020
+    loa: 0,
+    beam: 0,
+    maxDraft: 0,
+    currentDraftFwd: 0,
+    currentDraftAft: 0,
+    agent: '',
+    origin: '',
+    destination: '',
+    dwt: 0,
+    grossTonnage: 0,
+    terminalPreference: '',
+    yearBuilt: 0
   });
+
+  const handleShipNameInput = (nameQuery: string) => {
+    setFormData(prev => ({ ...prev, name: nameQuery }));
+
+    if (nameQuery.trim().length < 2) {
+      setVesselSuggestions([]);
+      setIsDropdownOpen(false);
+      setIsSearchingOnline(false);
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      return;
+    }
+
+    // 1. Search local database
+    const local = searchVesselsWithSuggestions(nameQuery, vessels, maneuvers);
+    setVesselSuggestions(local);
+    setIsDropdownOpen(local.length > 0);
+
+    // 2. Search VesselFinder.com
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (isOnline) {
+      setIsSearchingOnline(true);
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const online = await fetchVesselFinderOnline(nameQuery);
+          if (online && online.length > 0) {
+            setVesselSuggestions(prev => {
+              const seenImos = new Set(prev.map(p => p.vessel.imo));
+              const merged = [...prev];
+              for (const item of online) {
+                if (!seenImos.has(item.vessel.imo)) {
+                  seenImos.add(item.vessel.imo);
+                  merged.push(item);
+                }
+              }
+              return merged;
+            });
+            setIsDropdownOpen(true);
+          }
+        } catch {
+        } finally {
+          setIsSearchingOnline(false);
+        }
+      }, 400);
+    }
+  };
+
+  const applySuggestionToForm = async (res: VesselSearchResult) => {
+    const v = res.vessel;
+    setFormData({
+      name: v.name,
+      imo: v.imo,
+      callSign: v.callSign || '',
+      flag: v.flag || 'Internacional',
+      flagCode: v.flagCode || '',
+      type: v.type,
+      loa: v.loa || 0,
+      beam: v.beam || 0,
+      maxDraft: v.maxDraft || 0,
+      currentDraftFwd: v.currentDraftFwd || 0,
+      currentDraftAft: v.currentDraftAft || 0,
+      agent: v.agent || '',
+      origin: v.origin || '',
+      destination: v.destination || '',
+      dwt: (v as any).dwt || 0,
+      grossTonnage: v.grossTonnage || 0,
+      terminalPreference: (v as any).terminalPreference || '',
+      yearBuilt: (v as any).yearBuilt || 0
+    });
+    setIsDropdownOpen(false);
+
+    // If IMO present, fetch live details
+    if (v.imo && v.imo.length >= 4 && isOnline) {
+      try {
+        const details = await fetchVesselDetailsOnline(v.imo);
+        if (details) {
+          setFormData(prev => ({
+            ...prev,
+            maxDraft: details.draft || prev.maxDraft,
+            destination: details.destination || prev.destination
+          }));
+        }
+      } catch {}
+    }
+  };
 
   const filteredVessels = vessels.filter(v => {
     if (typeFilter !== 'all' && v.type !== typeFilter) return false;
@@ -216,24 +313,26 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-slate-50 border border-slate-300 p-3 rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">LOA (Comprimento)</span>
-                  <span className="text-lg font-black text-blue-900">{selectedVessel.loa} m</span>
+                  <span className="text-lg font-black text-blue-900">{selectedVessel.loa ? `${selectedVessel.loa} m` : '___'}</span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-300 p-3 rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">Beam (Largura / Boca)</span>
-                  <span className="text-lg font-black text-blue-900">{selectedVessel.beam} m</span>
+                  <span className="text-lg font-black text-blue-900">{selectedVessel.beam ? `${selectedVessel.beam} m` : '___'}</span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-300 p-3 rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">Calado Operacional</span>
                   <span className="text-lg font-black text-black">
-                    Vte {selectedVessel.currentDraftFwd}m / Ré {selectedVessel.currentDraftAft}m
+                    {(selectedVessel.currentDraftFwd || selectedVessel.currentDraftAft) 
+                      ? `Vte ${selectedVessel.currentDraftFwd || '___'}m / Ré ${selectedVessel.currentDraftAft || '___'}m`
+                      : '___'}
                   </span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-300 p-3 rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">GRT (Arqueação Bruta)</span>
-                  <span className="text-lg font-black text-black">{selectedVessel.grossTonnage.toLocaleString()} Ton</span>
+                  <span className="text-lg font-black text-black">{selectedVessel.grossTonnage ? `${selectedVessel.grossTonnage.toLocaleString()} Ton` : '___'}</span>
                 </div>
               </div>
 
@@ -241,15 +340,15 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
               <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-lg text-xs grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <span className="text-slate-500 block font-bold text-[10px]">PROCEDÊNCIA</span>
-                  <span className="font-bold text-black text-sm">{selectedVessel.origin || 'N/A'}</span>
+                  <span className="font-bold text-black text-sm">{selectedVessel.origin || '___'}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block font-bold text-[10px]">PRÓXIMO PORTO</span>
-                  <span className="font-bold text-black text-sm">{selectedVessel.destination || 'N/A'}</span>
+                  <span className="font-bold text-black text-sm">{selectedVessel.destination || '___'}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block font-bold text-[10px]">AGÊNCIA MARÍTIMA</span>
-                  <span className="font-bold text-black text-sm">{selectedVessel.agent || 'Agência Local'}</span>
+                  <span className="font-bold text-black text-sm">{selectedVessel.agent || '___'}</span>
                 </div>
               </div>
 
@@ -317,25 +416,64 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
 
             <form onSubmit={handleCreateVessel} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold uppercase text-black mb-1">Nome do Navio *</label>
+                <div className="relative">
+                  <label className="block font-bold uppercase text-black mb-1 flex items-center justify-between">
+                    <span>Nome do Navio *</span>
+                    {isSearchingOnline && (
+                      <span className="text-[10px] text-blue-700 flex items-center gap-1 font-normal">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Buscando VesselFinder...
+                      </span>
+                    )}
+                  </label>
                   <input
                     type="text"
                     value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="Ex: MSC ANNA"
-                    className="w-full bg-white border border-black rounded p-2 font-bold uppercase text-black"
+                    onChange={(e) => handleShipNameInput(e.target.value)}
+                    placeholder="___ (Digite para autocompletar)"
+                    className="w-full bg-white border border-black rounded p-2 font-bold uppercase text-black placeholder:text-slate-400"
                     required
                   />
+
+                  {/* Suggestions dropdown */}
+                  {isDropdownOpen && vesselSuggestions.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border-2 border-black rounded-lg shadow-2xl z-50 max-h-48 overflow-y-auto divide-y divide-slate-100">
+                      <div className="px-3 py-1 bg-blue-900 text-white text-[10px] font-bold uppercase flex justify-between">
+                        <span>Sugestões Encontradas ({vesselSuggestions.length})</span>
+                        <span>Clique para preencher</span>
+                      </div>
+                      {vesselSuggestions.map((item, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => applySuggestionToForm(item)}
+                          className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center justify-between gap-2"
+                        >
+                          <div>
+                            <div className="font-bold text-black flex items-center gap-1.5">
+                              <span>{item.vessel.name}</span>
+                              <span className="text-[10px] font-mono text-slate-500">IMO {item.vessel.imo}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-600">
+                              {item.vessel.flag || 'Internacional'} · LOA {item.vessel.loa || '___'}m · Boca {item.vessel.beam || '___'}m
+                            </div>
+                          </div>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${item.sourceBadgeColor}`}>
+                            {item.sourceLabel}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
                 <div>
                   <label className="block font-bold uppercase text-black mb-1">Número IMO *</label>
                   <input
                     type="text"
                     value={formData.imo}
                     onChange={(e) => setFormData({ ...formData, imo: e.target.value })}
-                    placeholder="Ex: 9784521"
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400 font-mono"
                     required
                   />
                 </div>
@@ -346,27 +484,32 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
                   <label className="block font-bold uppercase text-black mb-1">LOA (m)</label>
                   <input
                     type="number"
-                    value={formData.loa}
-                    onChange={(e) => setFormData({ ...formData, loa: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    step="0.1"
+                    value={formData.loa === 0 ? '' : formData.loa}
+                    onChange={(e) => setFormData({ ...formData, loa: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
                 <div>
                   <label className="block font-bold uppercase text-black mb-1">Boca / Largura (m)</label>
                   <input
                     type="number"
-                    value={formData.beam}
-                    onChange={(e) => setFormData({ ...formData, beam: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    step="0.1"
+                    value={formData.beam === 0 ? '' : formData.beam}
+                    onChange={(e) => setFormData({ ...formData, beam: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
                 <div>
                   <label className="block font-bold uppercase text-black mb-1">GRT</label>
                   <input
                     type="number"
-                    value={formData.grossTonnage}
-                    onChange={(e) => setFormData({ ...formData, grossTonnage: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    value={formData.grossTonnage === 0 ? '' : formData.grossTonnage}
+                    onChange={(e) => setFormData({ ...formData, grossTonnage: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
               </div>
@@ -378,7 +521,8 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
                     type="text"
                     value={formData.flag}
                     onChange={(e) => setFormData({ ...formData, flag: e.target.value })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    placeholder="___"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
                 <div>
@@ -405,7 +549,8 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
                     type="text"
                     value={formData.origin}
                     onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    placeholder="___ (Ex: Porto de Maputo ou Beira)"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
                 <div>
@@ -414,7 +559,8 @@ export const VesselsView: React.FC<VesselsViewProps> = ({ onSelectVesselForManeu
                     type="text"
                     value={formData.destination}
                     onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
-                    className="w-full bg-white border border-black rounded p-2 font-bold text-black"
+                    placeholder="___ (Ex: Porto de Nacala ou Durban)"
+                    className="w-full bg-white border border-black rounded p-2 font-bold text-black placeholder:text-slate-400"
                   />
                 </div>
               </div>

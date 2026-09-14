@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { 
   ShieldCheck, 
   Anchor, 
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useMaritime } from '../context/MaritimeContext';
 import { PilotRank } from '../types/maritime';
+import { RefreshCw, Database, Sparkles } from 'lucide-react';
 
 export const PilotRegistrationModal: React.FC = () => {
   const { 
@@ -22,7 +24,14 @@ export const PilotRegistrationModal: React.FC = () => {
     updateUserProfile, 
     logoutUser, 
     isProfileModalOpen, 
-    setIsProfileModalOpen 
+    setIsProfileModalOpen,
+    checkPilotBackupExists,
+    getPilotBackupSummary,
+    registeredPilotNames,
+    switchPilotByName,
+    syncStatusMessage,
+    clearSyncStatusMessage,
+    restoreFullBackup
   } = useMaritime();
 
   // If there's no currentUser, the modal MUST be open and cannot be dismissed
@@ -35,6 +44,9 @@ export const PilotRegistrationModal: React.FC = () => {
   const [vhfCallSign, setVhfCallSign] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const isExactBackupFound = name.trim().length > 1 && checkPilotBackupExists(name);
+  const backupSummary = isExactBackupFound ? getPilotBackupSummary(name) : null;
 
   // Synchronize initial values when editing profile
   useEffect(() => {
@@ -103,8 +115,12 @@ export const PilotRegistrationModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto transition-opacity duration-200">
-      <div 
-        className="bg-white border-2 border-black rounded-xl max-w-xl w-full shadow-2xl overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200"
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 12 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+        className="bg-white border-2 border-black rounded-xl max-w-xl w-full shadow-2xl overflow-hidden my-8"
         role="dialog"
         aria-modal="true"
       >
@@ -152,6 +168,58 @@ export const PilotRegistrationModal: React.FC = () => {
             </div>
           )}
 
+          {/* Status Message from previous sync */}
+          {syncStatusMessage && (
+            <div className="p-3 bg-emerald-50 border-2 border-emerald-600 rounded-lg text-xs font-bold text-emerald-900 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>{syncStatusMessage}</span>
+              </div>
+              <button 
+                type="button" 
+                onClick={clearSyncStatusMessage}
+                className="text-xs text-emerald-700 hover:text-emerald-900 font-black px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Funcionalidade de Restauro de Cópia de Segurança */}
+          <div className="bg-slate-50 p-3 rounded-lg border border-slate-300 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Database className="w-4 h-4 text-blue-900 shrink-0" />
+              <span className="text-xs font-semibold text-slate-700">
+                Possui um ficheiro de cópia de segurança (.json)?
+              </span>
+            </div>
+            <label className="px-3 py-1 bg-white hover:bg-slate-100 text-blue-900 border border-black rounded text-xs font-bold cursor-pointer transition-colors shrink-0">
+              <span>Restaurar Ficheiro</span>
+              <input
+                type="file"
+                accept=".json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = (ev) => {
+                    try {
+                      const data = JSON.parse(ev.target?.result as string);
+                      const ok = restoreFullBackup(data);
+                      if (ok) {
+                        setIsProfileModalOpen(false);
+                      }
+                    } catch {
+                      setError('Ficheiro de cópia de segurança inválido.');
+                    }
+                  };
+                  reader.readAsText(file);
+                }}
+              />
+            </label>
+          </div>
+
           {/* 1. Nome Completo */}
           <div>
             <label className="block text-xs font-black uppercase text-black mb-1.5 flex items-center justify-between">
@@ -164,12 +232,31 @@ export const PilotRegistrationModal: React.FC = () => {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Ex: Carlos Eduardo Silveira"
+                placeholder="Ex: Nome Completo do Prático"
                 required
                 autoFocus
                 className="w-full bg-white border-2 border-black rounded-lg pl-9 pr-3 py-2.5 text-sm font-bold text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-900"
               />
             </div>
+
+            {/* Dynamic Backup Match Feedback */}
+            {isExactBackupFound && backupSummary && (
+              <div className="mt-2 p-2.5 bg-emerald-50 border border-emerald-500 rounded-lg text-xs text-emerald-950 flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0 stroke-[3]" />
+                <div className="leading-tight">
+                  <strong className="text-emerald-900">Piloto Reconhecido Taxativamente:</strong> Cópia de segurança localizada ({backupSummary.maneuverCount} manobras). Ao confirmar, todos os dados serão sincronizados e restaurados!
+                </div>
+              </div>
+            )}
+
+            {!isExactBackupFound && name.trim().length > 3 && (
+              <div className="mt-2 p-2.5 bg-blue-50 border border-blue-300 rounded-lg text-xs text-blue-950 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-blue-800 shrink-0" />
+                <div className="leading-tight">
+                  <strong>Novo Utilizador:</strong> Se o nome for diferente em outro dispositivo, é considerado outro utilizador com registos e backup isolados.
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 2. Escalão como Piloto */}
@@ -240,7 +327,7 @@ export const PilotRegistrationModal: React.FC = () => {
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="Ex: +351 912 345 678 ou Ramal VTS"
+                placeholder="Ex: +258 84 123 4567 ou Ramal VTS"
                 className="w-full bg-white border-2 border-black rounded-lg pl-9 pr-3 py-2.5 text-sm font-semibold text-black placeholder:text-slate-400"
               />
             </div>
@@ -284,7 +371,7 @@ export const PilotRegistrationModal: React.FC = () => {
             </div>
           </div>
         </form>
-      </div>
+      </motion.div>
     </div>
   );
 };

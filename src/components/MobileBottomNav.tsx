@@ -26,8 +26,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ onOpenNewManeu
     >
       {/* 1. Início / Dashboard */}
       <button
+        id="mobile-nav-dashboard"
         onClick={() => setCurrentView('dashboard')}
-        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer ${
+        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer touch-manipulation active:scale-95 ${
           currentView === 'dashboard'
             ? 'text-cyan-400 font-black'
             : 'text-slate-400 hover:text-white font-medium'
@@ -39,8 +40,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ onOpenNewManeu
 
       {/* 2. Registo de Operação */}
       <button
+        id="mobile-nav-operacoes"
         onClick={() => setCurrentView('operacoes')}
-        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer ${
+        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer touch-manipulation active:scale-95 ${
           currentView === 'operacoes'
             ? 'text-cyan-400 font-black'
             : 'text-slate-400 hover:text-white font-medium'
@@ -52,8 +54,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ onOpenNewManeu
 
       {/* 3. Botão Central: + Novo Registo */}
       <button
+        id="mobile-nav-new-maneuver"
         onClick={onOpenNewManeuver}
-        className="flex flex-col items-center justify-center -mt-5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 w-12 h-12 rounded-full border-2 border-slate-900 shadow-xl active:scale-95 transition-transform cursor-pointer"
+        className="flex flex-col items-center justify-center -mt-5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 w-12 h-12 rounded-full border-2 border-slate-900 shadow-xl active:scale-90 transition-transform cursor-pointer touch-manipulation"
         title="Novo Registo de Manobra"
       >
         <Plus className="w-6 h-6 stroke-[3]" />
@@ -61,8 +64,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ onOpenNewManeu
 
       {/* 4. Saúde */}
       <button
+        id="mobile-nav-saude"
         onClick={() => setCurrentView('saude')}
-        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer ${
+        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer touch-manipulation active:scale-95 ${
           currentView === 'saude'
             ? 'text-rose-400 font-black'
             : 'text-slate-400 hover:text-white font-medium'
@@ -75,8 +79,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ onOpenNewManeu
 
       {/* 5. Alertas ou Arquivo */}
       <button
+        id="mobile-nav-arquivo"
         onClick={() => setCurrentView('arquivo')}
-        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer ${
+        className={`flex flex-col items-center justify-center p-1 rounded-lg min-w-[50px] transition-colors cursor-pointer touch-manipulation active:scale-95 ${
           currentView === 'arquivo'
             ? 'text-purple-400 font-black'
             : 'text-slate-400 hover:text-white font-medium'

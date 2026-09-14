@@ -136,9 +136,26 @@ const AppContent: React.FC = () => {
       <MobileBottomNav onOpenNewManeuver={() => handleOpenNewManeuver()} />
 
       {/* Mobile Pilot On-Board QuickLog HUD (Drawer / Modal) */}
-      {isMobileHudOpen && (
-        <MobilePilotLogView onClose={() => setIsMobileHudOpen(false)} />
-      )}
+      <AnimatePresence>
+        {isMobileHudOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-3 sm:p-5 overflow-y-auto flex items-start justify-center"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.98 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="w-full max-w-2xl my-auto"
+            >
+              <MobilePilotLogView onClose={() => setIsMobileHudOpen(false)} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* New / Edit Maneuver Modal */}
       <ManeuverFormModal
