@@ -178,6 +178,159 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [generatedPdfUrl, setGeneratedPdfUrl] = useState<string | null>(null);
 
+  // Backup e Resgate Automático de Rascunho (Document Draft Persistence)
+  const DRAFT_MANEUVER_KEY = 'pilots_records_maneuver_form_draft_v2';
+  const getEditDraftKey = (id: string) => `pilots_records_maneuver_edit_draft_${id}`;
+
+  const [hasRestoredDraft, setHasRestoredDraft] = useState<boolean>(false);
+  const [draftSavedToast, setDraftSavedToast] = useState<string | null>(null);
+  const [draftTimestamp, setDraftTimestamp] = useState<string | null>(null);
+
+  // Resgate automático de rascunho anterior não finalizado
+  useEffect(() => {
+    if (initialVessel) return;
+    const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft && (draft.shipName || draft.origin || draft.lastLineTime || draft.berthingTime || draft.remarks || draft.pilotOnBoardTime || draft.customPilotName)) {
+          if (draft.shipName !== undefined) setShipName(draft.shipName);
+          if (draft.imoNumber !== undefined) setImoNumber(draft.imoNumber);
+          if (draft.nationality !== undefined) setNationality(draft.nationality);
+          if (draft.vesselType !== undefined) setVesselType(draft.vesselType);
+          if (draft.loa !== undefined) setLoa(draft.loa);
+          if (draft.beam !== undefined) setBeam(draft.beam);
+          if (draft.grt !== undefined) setGrt(draft.grt);
+          if (draft.draftFwd !== undefined) setDraftFwd(draft.draftFwd);
+          if (draft.draftAft !== undefined) setDraftAft(draft.draftAft);
+          if (draft.origin !== undefined) setOrigin(draft.origin);
+          if (draft.nextPort !== undefined) setNextPort(draft.nextPort);
+          if (draft.maneuverDate !== undefined) setManeuverDate(draft.maneuverDate);
+          if (draft.pilotOnBoardTime !== undefined) setPilotOnBoardTime(draft.pilotOnBoardTime);
+          if (draft.lastLineTime !== undefined) setLastLineTime(draft.lastLineTime);
+          if (draft.firstLineTime !== undefined) setFirstLineTime(draft.firstLineTime);
+          if (draft.berthingTime !== undefined) setBerthingTime(draft.berthingTime);
+          if (draft.pilotDisembarkedTime !== undefined) setPilotDisembarkedTime(draft.pilotDisembarkedTime);
+          if (draft.berthingModel !== undefined) setBerthingModel(draft.berthingModel);
+          if (draft.tugsCount !== undefined) setTugsCount(draft.tugsCount);
+          if (draft.tugArranque !== undefined) setTugArranque(draft.tugArranque);
+          if (draft.tugInicio !== undefined) setTugInicio(draft.tugInicio);
+          if (draft.tugFim !== undefined) setTugFim(draft.tugFim);
+          if (draft.maneuverDuration !== undefined) setManeuverDuration(draft.maneuverDuration);
+          if (draft.maneuverType !== undefined) setManeuverType(draft.maneuverType);
+          if (draft.remarks !== undefined) setRemarks(draft.remarks);
+          if (draft.pilotId !== undefined) setPilotId(draft.pilotId);
+          if (draft.customPilotName !== undefined) setCustomPilotName(draft.customPilotName);
+          if (draft.berthTo !== undefined) setBerthTo(draft.berthTo);
+          if (draft.photoDataUrl !== undefined) setPhotoDataUrl(draft.photoDataUrl);
+          if (draft.photoFileName !== undefined) setPhotoFileName(draft.photoFileName);
+          setHasRestoredDraft(true);
+          setDraftTimestamp(draft.savedAt ? new Date(draft.savedAt).toLocaleTimeString('pt-PT') : null);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Salvamento automático contínuo em background (debounce)
+  useEffect(() => {
+    if (!shipName && !origin && !nextPort && !remarks && !pilotOnBoardTime && !lastLineTime && !berthingTime) {
+      return;
+    }
+    const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(draftKey, JSON.stringify({
+          shipName, imoNumber, nationality, vesselType, loa, beam, grt, draftFwd, draftAft,
+          origin, nextPort, maneuverDate, pilotOnBoardTime, lastLineTime, firstLineTime,
+          berthingTime, pilotDisembarkedTime, berthingModel, tugsCount, tugArranque,
+          tugInicio, tugFim, maneuverDuration, maneuverType, remarks, pilotId,
+          customPilotName, berthTo, photoDataUrl, photoFileName,
+          savedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [
+    shipName, imoNumber, nationality, vesselType, loa, beam, grt, draftFwd, draftAft,
+    origin, nextPort, maneuverDate, pilotOnBoardTime, lastLineTime, firstLineTime,
+    berthingTime, pilotDisembarkedTime, berthingModel, tugsCount, tugArranque,
+    tugInicio, tugFim, maneuverDuration, maneuverType, remarks, pilotId,
+    customPilotName, berthTo, photoDataUrl, photoFileName, editManeuver
+  ]);
+
+  // Salvar backup antes de descarregar a página / fechar app
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+      if (shipName || origin || remarks || pilotOnBoardTime || lastLineTime || berthingTime) {
+        try {
+          localStorage.setItem(draftKey, JSON.stringify({
+            shipName, imoNumber, nationality, vesselType, loa, beam, grt, draftFwd, draftAft,
+            origin, nextPort, maneuverDate, pilotOnBoardTime, lastLineTime, firstLineTime,
+            berthingTime, pilotDisembarkedTime, berthingModel, tugsCount, tugArranque,
+            tugInicio, tugFim, maneuverDuration, maneuverType, remarks, pilotId,
+            customPilotName, berthTo, photoDataUrl, photoFileName,
+            savedAt: new Date().toISOString()
+          }));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [shipName, imoNumber, nationality, vesselType, loa, beam, grt, draftFwd, draftAft, origin, nextPort, maneuverDate, pilotOnBoardTime, lastLineTime, firstLineTime, berthingTime, pilotDisembarkedTime, berthingModel, tugsCount, tugArranque, tugInicio, tugFim, maneuverDuration, maneuverType, remarks, pilotId, customPilotName, berthTo, photoDataUrl, photoFileName, editManeuver]);
+
+  const discardDraft = () => {
+    const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {}
+    setHasRestoredDraft(false);
+    setDraftSavedToast('Rascunho descartado com sucesso.');
+    setTimeout(() => setDraftSavedToast(null), 3000);
+
+    if (!editManeuver) {
+      setShipName('');
+      setImoNumber('');
+      setNationality('');
+      setLoa(0);
+      setBeam(0);
+      setGrt(0);
+      setDraftFwd(0);
+      setDraftAft(0);
+      setOrigin('');
+      setNextPort('');
+      setPilotOnBoardTime('');
+      setLastLineTime('');
+      setFirstLineTime('');
+      setBerthingTime('');
+      setPilotDisembarkedTime('');
+      setTugArranque('');
+      setTugInicio('');
+      setTugFim('');
+      setRemarks('');
+      setBerthTo('');
+      setPhotoDataUrl(null);
+      setPhotoFileName('');
+    }
+  };
+
+  const handleManualSaveDraft = () => {
+    const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({
+        shipName, imoNumber, nationality, vesselType, loa, beam, grt, draftFwd, draftAft,
+        origin, nextPort, maneuverDate, pilotOnBoardTime, lastLineTime, firstLineTime,
+        berthingTime, pilotDisembarkedTime, berthingModel, tugsCount, tugArranque,
+        tugInicio, tugFim, maneuverDuration, maneuverType, remarks, pilotId,
+        customPilotName, berthTo, photoDataUrl, photoFileName,
+        savedAt: new Date().toISOString()
+      }));
+      setDraftSavedToast('Backup / Rascunho guardado! Mesmo saindo do aplicativo, suas alterações estão protegidas.');
+      setTimeout(() => setDraftSavedToast(null), 4000);
+    } catch {}
+  };
+
   // Suggestions & Auto-fetching states
   const [isSearchingOnline, setIsSearchingOnline] = useState<boolean>(false);
   const [suggestions, setSuggestions] = useState<VesselSearchResult[]>([]);
@@ -420,14 +573,14 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
     }
   };
 
-  // Submit complete maneuver record
+  // Submit complete or partial maneuver record (Aceita salvar mesmo sem preenchimento total)
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!shipName.trim()) {
-      alert('Por favor, informe o Nome do Navio.');
-      return;
-    }
+    // Aceita salvar/guardar informações mesmo quando não estão preenchidas no total
+    const effectiveShipName = shipName.trim()
+      ? shipName.toUpperCase().trim()
+      : (imoNumber.trim() ? `NAVIO IMO ${imoNumber.trim()}` : `NAVIO EM REGISTO (${new Date().toLocaleDateString('pt-PT')})`);
 
     const selectedPilot = pilots.find(p => p.id === pilotId) || (currentUser && (pilotId === currentUser.id || !pilotId) ? { id: currentUser.id, name: currentUser.name } : pilots[0]);
     let finalPilotId = selectedPilot?.id || currentUser?.id;
@@ -450,29 +603,29 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
     // Ensure vessel is in system
     let vesselId = '';
     const existingVessel = vessels.find(
-      v => v.name.toLowerCase() === shipName.toLowerCase() || (imoNumber && v.imo === imoNumber)
+      v => v.name.toLowerCase() === effectiveShipName.toLowerCase() || (imoNumber && v.imo === imoNumber)
     );
 
     if (existingVessel) {
       vesselId = existingVessel.id;
     } else {
       vesselId = addVessel({
-        name: shipName.toUpperCase().trim(),
+        name: effectiveShipName,
         imo: imoNumber || `9${Math.floor(100000 + Math.random() * 900000)}`,
         callSign: 'PPXZ',
         flag: nationality || 'Internacional',
         flagCode: 'UN',
         type: vesselType,
-        loa: Number(loa),
-        beam: Number(beam),
-        maxDraft: Math.max(Number(draftFwd), Number(draftAft)) + 1.5,
-        currentDraftFwd: Number(draftFwd),
-        currentDraftAft: Number(draftAft),
+        loa: Number(loa) || 0,
+        beam: Number(beam) || 0,
+        maxDraft: Math.max(Number(draftFwd) || 0, Number(draftAft) || 0) + 1.5,
+        currentDraftFwd: Number(draftFwd) || 0,
+        currentDraftAft: Number(draftAft) || 0,
         agent: 'Agência Marítima do Porto',
-        origin: origin,
-        destination: nextPort,
-        dwt: Math.round(grt * 1.15),
-        grossTonnage: Number(grt)
+        origin: origin || 'Não especificada',
+        destination: nextPort || 'Não especificado',
+        dwt: Math.round((Number(grt) || 10000) * 1.15),
+        grossTonnage: Number(grt) || 0
       });
     }
 
@@ -554,11 +707,12 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
     if (editManeuver) {
       updateManeuver(editManeuver.id, maneuverPayload);
     } else {
+      const isComplete = Boolean(pilotDisembarkedTime || berthingTime);
       addManeuver({
         ...maneuverPayload,
-        status: 'concluida',
+        status: isComplete ? 'concluida' : 'em_curso',
         scheduledTime: new Date().toISOString(),
-        durationMinutes: 80,
+        durationMinutes: pilotDuty.minutes || 80,
         weather: weather,
         safetyChecklist: {
           pilotLadderCompliant: true,
@@ -574,6 +728,12 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
         pilotageCertificateSigned: true
       });
     }
+
+    // Limpar o rascunho de backup após gravação com sucesso
+    const draftKey = editManeuver ? getEditDraftKey(editManeuver.id) : DRAFT_MANEUVER_KEY;
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {}
 
     onClose();
   };
@@ -647,6 +807,45 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="p-5 sm:p-6 overflow-y-auto space-y-6 text-slate-900">
           
+          {/* BANNER DE RESGATE DE BACKUP / RASCUNHO */}
+          {hasRestoredDraft && (
+            <div className="bg-amber-50 border-2 border-amber-500 rounded-lg p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-black text-amber-950 uppercase tracking-wide flex items-center gap-2">
+                    <span>Backup / Rascunho Resgatado do Armazenamento</span>
+                    {draftTimestamp && (
+                      <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-mono">
+                        Última edição: {draftTimestamp}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-amber-900 mt-0.5">
+                    As informações que você começou a editar foram recuperadas automaticamente para você não perder dados ao sair do app.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={discardDraft}
+                className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-amber-100 text-amber-950 border border-amber-400 rounded shadow-xs whitespace-nowrap self-end sm:self-auto"
+              >
+                Descartar Rascunho
+              </button>
+            </div>
+          )}
+
+          {/* NOTIFICAÇÃO TEMPORÁRIA DE BACKUP SALVO */}
+          {draftSavedToast && (
+            <div className="p-3 bg-emerald-50 border-2 border-emerald-500 rounded-lg text-emerald-950 text-xs font-bold flex items-center gap-2.5 shadow-xs">
+              <Check className="w-4 h-4 text-emerald-700 shrink-0 stroke-[3]" />
+              <span>{draftSavedToast}</span>
+            </div>
+          )}
+
           {/* DATA DA OPERAÇÃO / REGISTO RETROATIVO */}
           <div className="bg-amber-50/80 border-2 border-amber-400 rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-center gap-3">
@@ -673,7 +872,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                 value={maneuverDate}
                 onChange={(e) => setManeuverDate(e.target.value)}
                 className="bg-white border-2 border-black rounded-md px-3 py-2 text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-blue-900 w-full sm:w-auto"
-                required
               />
               <button
                 type="button"
@@ -744,7 +942,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   }}
                   placeholder="Digite o nome do navio (ex: MSC ANNA VICTORIA, EVER GIVEN, PETROBRAS...)"
                   className="w-full bg-white border-2 border-black rounded-md px-3.5 py-2.5 text-sm font-bold text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800 focus:border-blue-800 uppercase pr-10"
-                  required
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
                   {isSearchingOnline && (
@@ -818,13 +1015,12 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   onChange={(e) => setImoNumber(e.target.value)}
                   placeholder="___"
                   className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400 font-mono"
-                  required
                 />
               </div>
 
               <div>
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  LOA (COMP.) *
+                  LOA (COMP.)
                 </label>
                 <div className="relative">
                   <input
@@ -834,7 +1030,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                     onChange={(e) => setLoa(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
                     placeholder="___"
                     className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
-                    required
                   />
                   <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
                 </div>
@@ -842,7 +1037,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
 
               <div>
                 <label className="block text-[11px] font-bold uppercase text-black mb-1">
-                  BOCA (LARG.) *
+                  BOCA (LARG.)
                 </label>
                 <div className="relative">
                   <input
@@ -852,7 +1047,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                     onChange={(e) => setBeam(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
                     placeholder="___"
                     className="w-full bg-white border border-black rounded px-2.5 py-2 text-sm font-bold text-black placeholder:text-slate-400"
-                    required
                   />
                   <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-semibold">m</span>
                 </div>
@@ -931,13 +1125,12 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   onChange={(e) => setOrigin(e.target.value)}
                   placeholder="___ (Ex: Porto de Maputo, Beira ou Durban)"
                   className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black placeholder:text-slate-400"
-                  required
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  PRÓXIMO PORTO (DESTINO) *
+                  PRÓXIMO PORTO (DESTINO)
                 </label>
                 <input
                   type="text"
@@ -945,7 +1138,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                   onChange={(e) => setNextPort(e.target.value)}
                   placeholder="___ (Ex: Porto de Nacala, Pemba ou Richards Bay)"
                   className="w-full bg-white border border-black rounded px-3 py-2 text-sm font-semibold text-black placeholder:text-slate-400"
-                  required
                 />
               </div>
             </div>
@@ -978,7 +1170,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                     value={pilotOnBoardTime}
                     onChange={(e) => setPilotOnBoardTime(e.target.value)}
                     className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
-                    required
                   />
                   <button
                     type="button"
@@ -998,7 +1189,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               {(maneuverType === 'mudanca' || maneuverType === 'puxanca' || maneuverType === 'desatracacao') && (
                 <div>
                   <label className="block text-xs font-bold uppercase text-black mb-1">
-                    {language === 'pt' ? 'Último Cabo (Largado)' : 'Last Line (Cast Off)'} *
+                    {language === 'pt' ? 'Último Cabo (Largado)' : 'Last Line (Cast Off)'}
                   </label>
                   <div className="flex gap-1.5">
                     <input
@@ -1006,7 +1197,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                       value={lastLineTime}
                       onChange={(e) => setLastLineTime(e.target.value)}
                       className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
-                      required
                     />
                     <button
                       type="button"
@@ -1026,7 +1216,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               {(maneuverType === 'atracacao' || maneuverType === 'mudanca' || maneuverType === 'puxanca') && (
                 <div>
                   <label className="block text-xs font-bold uppercase text-black mb-1">
-                    {language === 'pt' ? 'Primeiro Cabo em Terra' : 'First Line Ashore'} *
+                    {language === 'pt' ? 'Primeiro Cabo em Terra' : 'First Line Ashore'}
                   </label>
                   <div className="flex gap-1.5">
                     <input
@@ -1034,7 +1224,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                       value={firstLineTime}
                       onChange={(e) => setFirstLineTime(e.target.value)}
                       className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
-                      required
                     />
                     <button
                       type="button"
@@ -1054,7 +1243,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               {(maneuverType === 'atracacao' || maneuverType === 'mudanca' || maneuverType === 'puxanca') && (
                 <div>
                   <label className="block text-xs font-bold uppercase text-black mb-1">
-                    {language === 'pt' ? 'Atracado (All Fast)' : 'All Fast Completed'} *
+                    {language === 'pt' ? 'Atracado (All Fast)' : 'All Fast Completed'}
                   </label>
                   <div className="flex gap-1.5">
                     <input
@@ -1062,7 +1251,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                       value={berthingTime}
                       onChange={(e) => setBerthingTime(e.target.value)}
                       className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
-                      required
                     />
                     <button
                       type="button"
@@ -1081,7 +1269,7 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               {/* DESEMBARQUE DO PILOTO - Requerido em ATRACAÇÃO, MUDANÇA, PUXANÇA, DESATRACAÇÃO */}
               <div>
                 <label className="block text-xs font-bold uppercase text-black mb-1">
-                  {language === 'pt' ? 'Desembarque do Piloto' : 'Pilot Disembarked (Away)'} *
+                  {language === 'pt' ? 'Desembarque do Piloto' : 'Pilot Disembarked (Away)'}
                 </label>
                 <div className="flex gap-1.5">
                   <input
@@ -1089,7 +1277,6 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
                     value={pilotDisembarkedTime}
                     onChange={(e) => setPilotDisembarkedTime(e.target.value)}
                     className="flex-1 bg-white border-2 border-black rounded px-2.5 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
-                    required
                   />
                   <button
                     type="button"
@@ -1500,13 +1687,25 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
 
           {/* BOTÕES DE AÇÃO DO FORMULÁRIO */}
           <div className="pt-4 border-t-2 border-black flex flex-col sm:flex-row items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-lg border-2 border-black font-bold text-sm text-black hover:bg-slate-100 transition-colors"
-            >
-              Cancelar
-            </button>
+            <div className="w-full sm:w-auto flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2.5 rounded-lg border-2 border-slate-400 font-bold text-sm text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={handleManualSaveDraft}
+                className="px-4 py-2.5 rounded-lg border-2 border-amber-600 bg-amber-50 hover:bg-amber-100 text-amber-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-xs"
+                title="Salva um rascunho de backup deste documento sem fechar"
+              >
+                <Clock className="w-4 h-4 text-amber-700" />
+                <span>Guardar Rascunho / Backup</span>
+              </button>
+            </div>
 
             <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-2">
               <button
@@ -1522,9 +1721,10 @@ export const ManeuverFormModal: React.FC<ManeuverFormModalProps> = ({
               <button
                 type="submit"
                 className="w-full sm:w-auto px-6 py-2.5 rounded-lg border-2 border-black bg-blue-900 hover:bg-blue-800 text-white font-bold text-sm tracking-wide shadow-md flex items-center justify-center gap-2 transition-colors"
+                title="Guarda a manobra no sistema (aceita preenchimento parcial)"
               >
                 <Check className="w-4 h-4 text-blue-300 stroke-[3]" />
-                <span>GUARDAR REGISTO DE MANOBRA</span>
+                <span>GUARDAR MANOBRA (ACEITA PARCIAL)</span>
               </button>
             </div>
           </div>

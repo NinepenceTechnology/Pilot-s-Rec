@@ -174,6 +174,160 @@ function vesselFinderPlugin(): Plugin {
   };
 }
 
+function sharedSyncPlugin(): Plugin {
+  const dataDir = path.resolve(__dirname, 'data');
+  const alertsFile = path.resolve(dataDir, 'shared_alerts.json');
+  const maneuversFile = path.resolve(dataDir, 'shared_maneuvers.json');
+
+  const ensureDataFiles = () => {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(alertsFile)) {
+      fs.writeFileSync(alertsFile, '[]', 'utf8');
+    }
+    if (!fs.existsSync(maneuversFile)) {
+      fs.writeFileSync(maneuversFile, '[]', 'utf8');
+    }
+  };
+
+  const parseBody = (req: any): Promise<any> => {
+    return new Promise((resolve) => {
+      let body = '';
+      req.on('data', (chunk: any) => body += chunk);
+      req.on('end', () => {
+        try {
+          resolve(body ? JSON.parse(body) : {});
+        } catch {
+          resolve({});
+        }
+      });
+    });
+  };
+
+  const handleRoutes = async (req: any, res: any, next: any) => {
+    if (!req.url || !req.url.startsWith('/api/shared/')) {
+      return next();
+    }
+
+    ensureDataFiles();
+    const parsedUrl = new URL(req.url, 'http://localhost');
+    res.setHeader('Content-Type', 'application/json');
+
+    try {
+      // Shared Alerts Endpoint
+      if (parsedUrl.pathname === '/api/shared/alerts') {
+        if (req.method === 'GET') {
+          const content = fs.readFileSync(alertsFile, 'utf8');
+          res.end(JSON.stringify({ success: true, alerts: JSON.parse(content || '[]') }));
+          return;
+        }
+
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+          let current: any[] = [];
+          try {
+            current = JSON.parse(fs.readFileSync(alertsFile, 'utf8') || '[]');
+          } catch {
+            current = [];
+          }
+
+          if (body.alert) {
+            const idx = current.findIndex((a: any) => a.id === body.alert.id);
+            if (idx >= 0) {
+              current[idx] = { ...current[idx], ...body.alert };
+            } else {
+              current.unshift(body.alert);
+            }
+          } else if (Array.isArray(body.alerts)) {
+            const map = new Map<string, any>();
+            current.forEach((a: any) => map.set(a.id, a));
+            body.alerts.forEach((a: any) => map.set(a.id, a));
+            current = Array.from(map.values()).sort((a, b) => 
+              new Date(b.issuedAt || 0).getTime() - new Date(a.issuedAt || 0).getTime()
+            );
+          }
+
+          fs.writeFileSync(alertsFile, JSON.stringify(current, null, 2), 'utf8');
+          res.end(JSON.stringify({ success: true, alerts: current }));
+          return;
+        }
+
+        if (req.method === 'DELETE') {
+          const id = parsedUrl.searchParams.get('id');
+          let current: any[] = [];
+          try {
+            current = JSON.parse(fs.readFileSync(alertsFile, 'utf8') || '[]');
+          } catch {
+            current = [];
+          }
+
+          if (id) {
+            current = current.filter((a: any) => a.id !== id);
+            fs.writeFileSync(alertsFile, JSON.stringify(current, null, 2), 'utf8');
+          }
+          res.end(JSON.stringify({ success: true, alerts: current }));
+          return;
+        }
+      }
+
+      // Shared Maneuvers Endpoint
+      if (parsedUrl.pathname === '/api/shared/maneuvers') {
+        if (req.method === 'GET') {
+          const content = fs.readFileSync(maneuversFile, 'utf8');
+          res.end(JSON.stringify({ success: true, maneuvers: JSON.parse(content || '[]') }));
+          return;
+        }
+
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+          let current: any[] = [];
+          try {
+            current = JSON.parse(fs.readFileSync(maneuversFile, 'utf8') || '[]');
+          } catch {
+            current = [];
+          }
+
+          if (body.maneuver) {
+            const idx = current.findIndex((m: any) => m.id === body.maneuver.id);
+            if (idx >= 0) {
+              current[idx] = { ...current[idx], ...body.maneuver };
+            } else {
+              current.unshift(body.maneuver);
+            }
+          } else if (Array.isArray(body.maneuvers)) {
+            const map = new Map<string, any>();
+            current.forEach((m: any) => map.set(m.id, m));
+            body.maneuvers.forEach((m: any) => map.set(m.id, m));
+            current = Array.from(map.values()).sort((a, b) => 
+              new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+            );
+          }
+
+          fs.writeFileSync(maneuversFile, JSON.stringify(current, null, 2), 'utf8');
+          res.end(JSON.stringify({ success: true, maneuvers: current }));
+          return;
+        }
+      }
+
+      next();
+    } catch (err: any) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+  };
+
+  return {
+    name: 'vite-plugin-shared-sync',
+    configureServer(server) {
+      server.middlewares.use(handleRoutes);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handleRoutes);
+    }
+  };
+}
+
 function aistudioMediaPlugin(): Plugin {
   return {
     name: 'vite-plugin-aistudio-media',
@@ -237,7 +391,7 @@ export default defineConfig(() => {
   return {
     // Required by Electron file:// loading and Capacitor's local WebView.
     base: './',
-    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), vesselFinderPlugin()],
+    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), vesselFinderPlugin(), sharedSyncPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

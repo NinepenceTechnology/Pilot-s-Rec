@@ -23,6 +23,7 @@ import {
 } from '../data/initialData';
 import { exportManeuversToExcel, exportFullJsonBackup } from '../utils/excelImportExport';
 import { Language, Translations, TRANSLATIONS } from '../utils/translations';
+import { calculateMinuteTide } from '../utils/tideCalculation';
 
 export type AppView = 
   | 'dashboard' 
@@ -119,6 +120,76 @@ const REGISTERED_PILOTS_KEY = 'pilots_records_registered_pilots_list_v2';
 
 export const normalizePilotKey = (name: string): string => {
   return name.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+};
+
+// Global Data Merging Helpers across users and pilots
+export const mergeAlerts = (listA: MaritimeAlert[], listB: MaritimeAlert[]): MaritimeAlert[] => {
+  const map = new Map<string, MaritimeAlert>();
+  (listA || []).forEach(a => { if (a && a.id) map.set(a.id, a); });
+  (listB || []).forEach(b => {
+    if (!b || !b.id) return;
+    const existing = map.get(b.id);
+    if (!existing) {
+      map.set(b.id, b);
+    } else {
+      const timeA = new Date(existing.issuedAt || 0).getTime();
+      const timeB = new Date(b.issuedAt || 0).getTime();
+      if (timeB >= timeA) {
+        map.set(b.id, { ...existing, ...b });
+      }
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => 
+    new Date(b.issuedAt || 0).getTime() - new Date(a.issuedAt || 0).getTime()
+  );
+};
+
+export const mergeManeuvers = (listA: ManeuverRecord[], listB: ManeuverRecord[]): ManeuverRecord[] => {
+  const map = new Map<string, ManeuverRecord>();
+  (listA || []).forEach(m => { if (m && m.id) map.set(m.id, m); });
+  (listB || []).forEach(m => {
+    if (!m || !m.id) return;
+    const existing = map.get(m.id);
+    if (!existing) {
+      map.set(m.id, m);
+    } else {
+      const timeA = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+      const timeB = new Date(m.updatedAt || m.createdAt || 0).getTime();
+      if (timeB >= timeA) {
+        map.set(m.id, { ...existing, ...m });
+      }
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => 
+    new Date(b.scheduledTime || b.createdAt || 0).getTime() - new Date(a.scheduledTime || a.createdAt || 0).getTime()
+  );
+};
+
+export const mergeVessels = (listA: Vessel[], listB: Vessel[]): Vessel[] => {
+  const map = new Map<string, Vessel>();
+  (listA || []).forEach(v => { if (v && v.id) map.set(v.id, v); });
+  (listB || []).forEach(v => {
+    if (!v || !v.id) return;
+    if (!map.has(v.id)) {
+      map.set(v.id, v);
+    }
+  });
+  return Array.from(map.values());
+};
+
+// Broadcast channel for real-time client synchronization
+const SYNC_CHANNEL_NAME = 'pilots_records_sync_bus_v2';
+let syncChannel: BroadcastChannel | null = null;
+try {
+  if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+    syncChannel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+  }
+} catch {}
+
+const broadcastSharedEvent = (type: string, payload: any) => {
+  try {
+    syncChannel?.postMessage({ type, payload, timestamp: Date.now() });
+  } catch {}
 };
 
 // Purge any pre-existing v1 mock data from browser localStorage to start cleanly from zero
@@ -316,6 +387,133 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [weather]);
 
+  // Automatic Real-Time Tide Calculation: Updates weather tide height & trend based on current date & minute
+  useEffect(() => {
+    const updateRealtimeTide = () => {
+      try {
+        const now = new Date();
+        const currentMinute = (now.getHours() * 60) + now.getMinutes();
+        const tide = calculateMinuteTide(now.getFullYear(), now.getMonth() + 1, now.getDate(), currentMinute);
+        
+        setWeather(prev => {
+          if (prev.tideHeightMeters === tide.height && prev.tideState === tide.trend) {
+            return prev;
+          }
+          return {
+            ...prev,
+            tideHeightMeters: tide.height,
+            tideState: tide.trend
+          };
+        });
+      } catch (err) {
+        console.error('Error computing dynamic tide for current date:', err);
+      }
+    };
+
+    updateRealtimeTide();
+    const timer = setInterval(updateRealtimeTide, 30000); // Re-calculate every 30 seconds
+    return () => clearInterval(timer);
+  }, []);
+
+  // Global Cross-User Synchronization: Sync Alerts & Maneuvers with Server and other tabs
+  useEffect(() => {
+    const syncAlertsWithServer = async () => {
+      try {
+        const res = await fetch('/api/shared/alerts');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && Array.isArray(data.alerts)) {
+          setAlerts(prev => {
+            const merged = mergeAlerts(prev, data.alerts);
+            try {
+              localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      } catch {}
+    };
+
+    const syncManeuversWithServer = async () => {
+      try {
+        const res = await fetch('/api/shared/maneuvers');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && Array.isArray(data.maneuvers)) {
+          setManeuvers(prev => {
+            const merged = mergeManeuvers(prev, data.maneuvers);
+            try {
+              localStorage.setItem(STORAGE_KEYS.MANEUVERS, JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      } catch {}
+    };
+
+    // Initial sync
+    syncAlertsWithServer();
+    syncManeuversWithServer();
+
+    // Periodic sync every 12 seconds when online
+    const intervalId = setInterval(() => {
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        syncAlertsWithServer();
+        syncManeuversWithServer();
+      }
+    }, 12000);
+
+    // Sync on reconnections or window focus
+    const handleSyncTrigger = () => {
+      syncAlertsWithServer();
+      syncManeuversWithServer();
+    };
+
+    window.addEventListener('online', handleSyncTrigger);
+    window.addEventListener('focus', handleSyncTrigger);
+
+    // Listen to storage events from other windows/tabs in the same browser
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEYS.ALERTS && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setAlerts(parsed);
+        } catch {}
+      }
+      if (e.key === STORAGE_KEYS.MANEUVERS && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setManeuvers(parsed);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // Listen to BroadcastChannel for instant inter-session sync
+    if (syncChannel) {
+      syncChannel.onmessage = (event) => {
+        const { type, payload } = event.data || {};
+        if (type === 'ALERT_UPSERT' && payload) {
+          setAlerts(prev => mergeAlerts(prev, [payload]));
+        } else if (type === 'ALERT_DELETE' && payload) {
+          setAlerts(prev => prev.filter(a => a.id !== payload));
+        } else if (type === 'MANEUVER_UPSERT' && payload) {
+          setManeuvers(prev => mergeManeuvers(prev, [payload]));
+        } else if (type === 'SYNC_ALL') {
+          syncAlertsWithServer();
+          syncManeuversWithServer();
+        }
+      };
+    }
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('online', handleSyncTrigger);
+      window.removeEventListener('focus', handleSyncTrigger);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
   // Continuous Pilot Backup Synchronization (Specific to Active Pilot)
   useEffect(() => {
     if (!currentUser?.name) return;
@@ -359,20 +557,43 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setPilots(prev => prev.map(p => p.id === maneuverData.pilotId ? { ...p, status: 'em_manobra' } : p));
     }
 
+    // Server & Broadcast Synchronization for shared operations
+    try {
+      fetch('/api/shared/maneuvers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maneuver: newManeuver })
+      }).catch(() => {});
+    } catch {}
+    broadcastSharedEvent('MANEUVER_UPSERT', newManeuver);
+
     return newId;
   };
 
   const updateManeuver = (id: string, updates: Partial<ManeuverRecord>) => {
+    let updatedItem: ManeuverRecord | null = null;
     setManeuvers(prev => prev.map(m => {
       if (m.id === id) {
-        return {
+        updatedItem = {
           ...m,
           ...updates,
           updatedAt: new Date().toISOString()
         };
+        return updatedItem;
       }
       return m;
     }));
+
+    if (updatedItem) {
+      try {
+        fetch('/api/shared/maneuvers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maneuver: updatedItem })
+        }).catch(() => {});
+      } catch {}
+      broadcastSharedEvent('MANEUVER_UPSERT', updatedItem);
+    }
   };
 
   const updateMilestone = (maneuverId: string, milestoneKey: keyof TimeMilestones, timeString?: string) => {
@@ -576,9 +797,9 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const raw = localStorage.getItem(key);
       if (raw) {
         const backup = JSON.parse(raw);
-        if (Array.isArray(backup.maneuvers)) setManeuvers(backup.maneuvers);
-        if (Array.isArray(backup.vessels) && backup.vessels.length > 0) setVessels(backup.vessels);
-        if (Array.isArray(backup.alerts)) setAlerts(backup.alerts);
+        if (Array.isArray(backup.maneuvers)) setManeuvers(prev => mergeManeuvers(prev, backup.maneuvers));
+        if (Array.isArray(backup.vessels) && backup.vessels.length > 0) setVessels(prev => mergeVessels(prev, backup.vessels));
+        if (Array.isArray(backup.alerts)) setAlerts(prev => mergeAlerts(prev, backup.alerts));
         if (Array.isArray(backup.shifts)) setShifts(backup.shifts);
 
         const profile: UserPilotProfile = {
@@ -615,13 +836,13 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const backupData = JSON.parse(existingBackupStr);
         if (Array.isArray(backupData.maneuvers)) {
-          setManeuvers(backupData.maneuvers);
+          setManeuvers(prev => mergeManeuvers(prev, backupData.maneuvers));
         }
         if (Array.isArray(backupData.vessels) && backupData.vessels.length > 0) {
-          setVessels(backupData.vessels);
+          setVessels(prev => mergeVessels(prev, backupData.vessels));
         }
         if (Array.isArray(backupData.alerts) && backupData.alerts.length > 0) {
-          setAlerts(backupData.alerts);
+          setAlerts(prev => mergeAlerts(prev, backupData.alerts));
         }
         if (Array.isArray(backupData.shifts) && backupData.shifts.length > 0) {
           setShifts(backupData.shifts);
@@ -823,7 +1044,7 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setManeuvers(prev => prev.filter(m => m.id !== id));
   };
 
-  // Alertas Portuários
+  // Alertas Portuários - Compartilhados com TODOS os utilizadores do app
   const addAlert = (alertData: Omit<MaritimeAlert, 'id' | 'issuedAt'>): string => {
     const id = `alt-${Date.now().toString().slice(-6)}`;
     const newAlert: MaritimeAlert = {
@@ -831,20 +1052,99 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id,
       issuedAt: new Date().toISOString()
     };
-    setAlerts(prev => [newAlert, ...prev]);
+    
+    setAlerts(prev => {
+      const updated = [newAlert, ...prev.filter(a => a.id !== id)];
+      try {
+        localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // Server & Broadcast Synchronization
+    broadcastSharedEvent('ALERT_UPSERT', newAlert);
+    try {
+      fetch('/api/shared/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert: newAlert })
+      }).catch(() => {});
+    } catch {}
+
     return id;
   };
 
   const updateAlert = (id: string, updates: Partial<MaritimeAlert>) => {
-    setAlerts(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
+    let updatedItem: MaritimeAlert | null = null;
+    setAlerts(prev => {
+      const next = prev.map(a => {
+        if (a.id === id) {
+          updatedItem = { ...a, ...updates };
+          return updatedItem;
+        }
+        return a;
+      });
+      try {
+        localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    if (updatedItem) {
+      broadcastSharedEvent('ALERT_UPSERT', updatedItem);
+      try {
+        fetch('/api/shared/alerts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alert: updatedItem })
+        }).catch(() => {});
+      } catch {}
+    }
   };
 
   const toggleAlertActive = (id: string) => {
-    setAlerts(prev => prev.map(a => a.id === id ? { ...a, isActive: !a.isActive } : a));
+    let updatedItem: MaritimeAlert | null = null;
+    setAlerts(prev => {
+      const next = prev.map(a => {
+        if (a.id === id) {
+          updatedItem = { ...a, isActive: !a.isActive };
+          return updatedItem;
+        }
+        return a;
+      });
+      try {
+        localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    if (updatedItem) {
+      broadcastSharedEvent('ALERT_UPSERT', updatedItem);
+      try {
+        fetch('/api/shared/alerts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alert: updatedItem })
+        }).catch(() => {});
+      } catch {}
+    }
   };
 
   const deleteAlert = (id: string) => {
-    setAlerts(prev => prev.filter(a => a.id !== id));
+    setAlerts(prev => {
+      const next = prev.filter(a => a.id !== id);
+      try {
+        localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    broadcastSharedEvent('ALERT_DELETE', id);
+    try {
+      fetch(`/api/shared/alerts?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      }).catch(() => {});
+    } catch {}
   };
 
   // Import / Export Excel (.xlsx) & Backup JSON

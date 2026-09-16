@@ -44,9 +44,99 @@ export function minutesToTime(totalMinutes: number): string {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
 }
 
-// Find day prediction in table
-export function getDayPrediction(year: number, month: number, day: number): DayTidePrediction | undefined {
-  return BEIRA_TIDES_2026.find(d => d.year === year && d.month === month && d.day === day);
+export function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+// Port of Beira calibrated astronomical harmonic constituents
+const C0_BEIRA = 3.4902;
+const CONSTITUENTS_BEIRA = [
+  { name: 'M2', A: -0.7453, B: 1.6245 },
+  { name: 'S2', A: -1.0017, B: 0.4923 },
+  { name: 'N2', A: -0.0467, B: 0.2145 },
+  { name: 'K2', A: -0.2655, B: 0.1426 },
+  { name: 'K1', A: -0.0035, B: -0.0052 },
+  { name: 'O1', A: 0.0693, B: 0.0060 },
+  { name: 'M4', A: -0.0458, B: -0.1010 }
+];
+
+function getAstroArgs(dateUtc: Date): number[] {
+  const d = (dateUtc.getTime() - Date.UTC(2000, 0, 1, 12, 0, 0)) / 86400000;
+  const T = d / 36525;
+  const s = (218.3164477 + 481267.88128 * T) * (Math.PI / 180);
+  const h = (280.46646 + 36000.76983 * T) * (Math.PI / 180);
+  const p = (83.3532465 + 4069.0137287 * T) * (Math.PI / 180);
+  const localHours = dateUtc.getUTCHours() + dateUtc.getUTCMinutes() / 60 + 2; // Beira CAT UTC+2
+  const tau = (15 * localHours * (Math.PI / 180)) - s + h;
+  return [
+    2 * tau,
+    2 * (15 * localHours * (Math.PI / 180)),
+    2 * tau - s + p,
+    2 * (15 * localHours * (Math.PI / 180)) + 2 * h,
+    (15 * localHours * (Math.PI / 180)) + h + Math.PI / 2,
+    (15 * localHours * (Math.PI / 180)) - 2 * s + h - Math.PI / 2,
+    4 * tau
+  ];
+}
+
+/**
+ * Synthesizes a realistic hydrographic day prediction for any date outside the official table
+ */
+export function synthesizeDayPrediction(year: number, month: number, day: number): DayTidePrediction {
+  const calcHeightAtMinute = (minuteOfDay: number) => {
+    // UTC time for Beira (CAT UTC+2): minuteOfDay - 120
+    const d = new Date(Date.UTC(year, month - 1, day, 0, minuteOfDay - 120, 0));
+    const args = getAstroArgs(d);
+    let h = C0_BEIRA;
+    for (let i = 0; i < CONSTITUENTS_BEIRA.length; i++) {
+      h += CONSTITUENTS_BEIRA[i].A * Math.cos(args[i]) + CONSTITUENTS_BEIRA[i].B * Math.sin(args[i]);
+    }
+    return h;
+  };
+
+  const extrema: TideExtreme[] = [];
+  let prevSlope: number | null = null;
+
+  for (let m = -30; m < 1440 + 30; m++) {
+    const h1 = calcHeightAtMinute(m);
+    const h2 = calcHeightAtMinute(m + 1);
+    const slope = h2 - h1;
+
+    if (prevSlope !== null) {
+      if (prevSlope > 0 && slope <= 0 && m >= 0 && m < 1440) {
+        extrema.push({
+          time: minutesToTime(m),
+          height: Math.round(h1 * 10) / 10,
+          type: 'HW'
+        });
+      } else if (prevSlope < 0 && slope >= 0 && m >= 0 && m < 1440) {
+        extrema.push({
+          time: minutesToTime(m),
+          height: Math.round(h1 * 10) / 10,
+          type: 'LW'
+        });
+      }
+    }
+    prevSlope = slope;
+  }
+
+  const DOW = ['SU', 'M', 'TU', 'W', 'TH', 'F', 'SA'];
+  const dayOfWeek = DOW[new Date(year, month - 1, day).getDay()] || '---';
+
+  return {
+    day,
+    month,
+    year,
+    dayOfWeek,
+    extrema
+  };
+}
+
+// Find day prediction in table, or synthesize for any future or unrecorded date
+export function getDayPrediction(year: number, month: number, day: number): DayTidePrediction {
+  const official = BEIRA_TIDES_2026.find(d => d.year === year && d.month === month && d.day === day);
+  if (official) return official;
+  return synthesizeDayPrediction(year, month, day);
 }
 
 // Get flattened continuous timestamp points for continuous boundary interpolation
@@ -60,24 +150,13 @@ interface AbsoluteExtreme {
 function getNearbyExtrema(year: number, month: number, day: number): AbsoluteExtreme[] {
   const result: AbsoluteExtreme[] = [];
   
+  const currDt = new Date(year, month - 1, day);
+  const prevDt = new Date(currDt.getTime() - 86400000);
+  const nextDt = new Date(currDt.getTime() + 86400000);
+
   // Previous day
-  let prevMonth = month;
-  let prevDay = day - 1;
-  let prevYear = year;
-  if (prevDay < 1) {
-    prevMonth = month - 1;
-    if (prevMonth === 8) {
-      prevDay = 31; // Aug
-    } else if (prevMonth === 9) {
-      prevDay = 30; // Sep
-    } else if (prevMonth === 10) {
-      prevDay = 31; // Oct
-    } else if (prevMonth === 11) {
-      prevDay = 30; // Nov
-    }
-  }
-  const prevData = getDayPrediction(prevYear, prevMonth, prevDay);
-  if (prevData) {
+  const prevData = getDayPrediction(prevDt.getFullYear(), prevDt.getMonth() + 1, prevDt.getDate());
+  if (prevData && prevData.extrema.length) {
     prevData.extrema.forEach(e => {
       result.push({
         absMinute: timeToMinutes(e.time) - 1440,
@@ -90,7 +169,7 @@ function getNearbyExtrema(year: number, month: number, day: number): AbsoluteExt
 
   // Current day
   const currData = getDayPrediction(year, month, day);
-  if (currData) {
+  if (currData && currData.extrema.length) {
     currData.extrema.forEach(e => {
       result.push({
         absMinute: timeToMinutes(e.time),
@@ -102,16 +181,8 @@ function getNearbyExtrema(year: number, month: number, day: number): AbsoluteExt
   }
 
   // Next day
-  let nextMonth = month;
-  let nextDay = day + 1;
-  let nextYear = year;
-  const daysInMonth = (month === 9 || month === 11) ? 30 : 31;
-  if (nextDay > daysInMonth) {
-    nextDay = 1;
-    nextMonth = month + 1;
-  }
-  const nextData = getDayPrediction(nextYear, nextMonth, nextDay);
-  if (nextData) {
+  const nextData = getDayPrediction(nextDt.getFullYear(), nextDt.getMonth() + 1, nextDt.getDate());
+  if (nextData && nextData.extrema.length) {
     nextData.extrema.forEach(e => {
       result.push({
         absMinute: timeToMinutes(e.time) + 1440,
@@ -122,15 +193,14 @@ function getNearbyExtrema(year: number, month: number, day: number): AbsoluteExt
     });
   }
 
-  // Fallback synthesis if boundary extremes missing (e.g. at edges of full dataset)
-  if (result.length > 0 && currData) {
+  // Fallback synthesis if boundary extremes missing (e.g. at edges of dataset)
+  if (result.length > 0 && currData && currData.extrema.length) {
     const first = result[0];
     if (first.absMinute > 0) {
-      // Synthesize previous extreme roughly 6h 12m earlier with alternate type
       const oppType = currData.extrema[0].type === 'HW' ? 'LW' : 'HW';
       const avgOppHeight = oppType === 'HW' ? 5.8 : 1.2;
       result.unshift({
-        absMinute: currData.extrema[0] ? timeToMinutes(currData.extrema[0].time) - 372 : -372,
+        absMinute: timeToMinutes(currData.extrema[0].time) - 372,
         height: avgOppHeight,
         type: oppType,
         timeLabel: 'Extrapolado Ant.'
@@ -390,6 +460,117 @@ export function exportMinuteTideToCSV(summary: DayTideSummary): string {
     `${m.previousExtreme.type} ${m.previousExtreme.height}m (${m.previousExtreme.time})`,
     `${m.nextExtreme.type} ${m.nextExtreme.height}m (${m.nextExtreme.time})`
   ]);
+
+  return [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+}
+
+export interface FutureDayTideOverview {
+  date: Date;
+  dateStr: string; // "YYYY-MM-DD"
+  day: number;
+  month: number;
+  year: number;
+  dayOfWeek: string;
+  tideType: 'Vivas (Spring)' | 'Mortas (Neap)' | 'Médias (Intermediate)';
+  rangeMeters: number;
+  maxHeight: number;
+  minHeight: number;
+  extrema: TideExtreme[];
+  isToday?: boolean;
+}
+
+export function getFutureDayOverview(year: number, month: number, day: number): FutureDayTideOverview {
+  const prediction = getDayPrediction(year, month, day);
+  const extrema = prediction.extrema || [];
+  
+  let maxHeight = 0;
+  let minHeight = 99;
+  extrema.forEach(e => {
+    if (e.height > maxHeight) maxHeight = e.height;
+    if (e.height < minHeight) minHeight = e.height;
+  });
+  if (minHeight === 99) minHeight = 1.0;
+  if (maxHeight === 0) maxHeight = 6.0;
+
+  const rangeMeters = Math.round((maxHeight - minHeight) * 100) / 100;
+  let tideType: 'Vivas (Spring)' | 'Mortas (Neap)' | 'Médias (Intermediate)';
+  if (rangeMeters >= 4.5) {
+    tideType = 'Vivas (Spring)';
+  } else if (rangeMeters <= 2.8) {
+    tideType = 'Mortas (Neap)';
+  } else {
+    tideType = 'Médias (Intermediate)';
+  }
+
+  const dateObj = new Date(year, month - 1, day);
+  const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+
+  const now = new Date();
+  const isToday = now.getFullYear() === year && (now.getMonth() + 1) === month && now.getDate() === day;
+
+  return {
+    date: dateObj,
+    dateStr,
+    day,
+    month,
+    year,
+    dayOfWeek: prediction.dayOfWeek,
+    tideType,
+    rangeMeters,
+    maxHeight,
+    minHeight,
+    extrema,
+    isToday
+  };
+}
+
+export function getFutureTidesList(startDate: Date, daysCount: number = 30): FutureDayTideOverview[] {
+  const results: FutureDayTideOverview[] = [];
+  const cur = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+
+  for (let i = 0; i < daysCount; i++) {
+    const d = new Date(cur.getTime() + i * 86400000);
+    results.push(getFutureDayOverview(d.getFullYear(), d.getMonth() + 1, d.getDate()));
+  }
+
+  return results;
+}
+
+export function exportFutureTidesToCSV(days: FutureDayTideOverview[]): string {
+  const headers = [
+    'Data',
+    'Dia da Semana',
+    'Regime',
+    'Amplitude (m)',
+    'Preamar 1 (Hora / Altura)',
+    'Baixa-mar 1 (Hora / Altura)',
+    'Preamar 2 (Hora / Altura)',
+    'Baixa-mar 2 (Hora / Altura)',
+    'Todos os Extremos'
+  ];
+
+  const rows = days.map(d => {
+    const hwList = d.extrema.filter(e => e.type === 'HW');
+    const lwList = d.extrema.filter(e => e.type === 'LW');
+
+    const hw1 = hwList[0] ? `${hwList[0].time} (${hwList[0].height}m)` : '---';
+    const lw1 = lwList[0] ? `${lwList[0].time} (${lwList[0].height}m)` : '---';
+    const hw2 = hwList[1] ? `${hwList[1].time} (${hwList[1].height}m)` : '---';
+    const lw2 = lwList[1] ? `${lwList[1].time} (${lwList[1].height}m)` : '---';
+    const allExt = d.extrema.map(e => `${e.type === 'HW' ? 'PM' : 'BM'} ${e.time} ${e.height}m`).join(' | ');
+
+    return [
+      d.dateStr,
+      d.dayOfWeek,
+      d.tideType,
+      d.rangeMeters.toFixed(2),
+      hw1,
+      lw1,
+      hw2,
+      lw2,
+      allExt
+    ];
+  });
 
   return [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
 }

@@ -21,7 +21,12 @@ import {
   Maximize2,
   Table as TableIcon,
   TrendingUp,
-  FileSpreadsheet
+  FileSpreadsheet,
+  CalendarRange,
+  CalendarDays,
+  Filter,
+  Sparkles,
+  ExternalLink
 } from 'lucide-react';
 import { 
   BEIRA_PORT_METADATA, 
@@ -35,6 +40,10 @@ import {
   exportMinuteTideToCSV, 
   minutesToTime, 
   timeToMinutes,
+  getDaysInMonth,
+  getFutureTidesList,
+  exportFutureTidesToCSV,
+  FutureDayTideOverview,
   MinuteTideData
 } from '../utils/tideCalculation';
 import { useMaritime } from '../context/MaritimeContext';
@@ -42,12 +51,15 @@ import { useMaritime } from '../context/MaritimeContext';
 export const TideCalculatorView: React.FC = () => {
   const { weather } = useMaritime();
 
-  // Selected date state - Default to current simulated date: September 10, 2026
-  const [selectedMonth, setSelectedMonth] = useState<number>(9);
-  const [selectedDay, setSelectedDay] = useState<number>(10);
+  // Navigation tab: 'calculator' (Minute by Minute curve + UKC) vs 'future_search' (Search & Horizon Planner)
+  const [activeTab, setActiveTab] = useState<'calculator' | 'future_search'>('calculator');
+
+  // Selected date state - Defaults dynamically to today's date
+  const now = useMemo(() => new Date(), []);
+  const [selectedYear, setSelectedYear] = useState<number>(() => now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => now.getMonth() + 1);
+  const [selectedDay, setSelectedDay] = useState<number>(() => now.getDate());
   const [selectedMinute, setSelectedMinute] = useState<number>(() => {
-    // Current time in Beira or default to 08:30 (510 minutes)
-    const now = new Date();
     return (now.getHours() * 60) + now.getMinutes();
   });
 
@@ -63,15 +75,23 @@ export const TideCalculatorView: React.FC = () => {
   const [vesselDraft, setVesselDraft] = useState<number>(9.8); // meters
   const [squatMargin, setSquatMargin] = useState<number>(0.3); // meters
 
-  // Days in selected month
-  const maxDaysInMonth = (selectedMonth === 9 || selectedMonth === 11) ? 30 : 31;
+  // Future Search & Horizon Planner state
+  const [futureHorizonDays, setFutureHorizonDays] = useState<number>(30);
+  const [futureMinHWFilter, setFutureMinHWFilter] = useState<number>(0);
+  const [futureTypeFilter, setFutureTypeFilter] = useState<'all' | 'vivas' | 'mortas'>('all');
+  const [futureSearchQuery, setFutureSearchQuery] = useState<string>('');
 
-  // Ensure day is valid when month changes
+  // Days in selected month
+  const maxDaysInMonth = useMemo(() => {
+    return getDaysInMonth(selectedYear, selectedMonth);
+  }, [selectedYear, selectedMonth]);
+
+  // Ensure day is valid when month/year changes
   useEffect(() => {
     if (selectedDay > maxDaysInMonth) {
       setSelectedDay(maxDaysInMonth);
     }
-  }, [selectedMonth, maxDaysInMonth, selectedDay]);
+  }, [selectedYear, selectedMonth, maxDaysInMonth, selectedDay]);
 
   // Live timer tick
   useEffect(() => {
@@ -84,13 +104,13 @@ export const TideCalculatorView: React.FC = () => {
 
   // Calculate day summary (1440 minutes + extrema + range)
   const daySummary = useMemo(() => {
-    return calculateDayTideSummary(2026, selectedMonth, selectedDay);
-  }, [selectedMonth, selectedDay]);
+    return calculateDayTideSummary(selectedYear, selectedMonth, selectedDay);
+  }, [selectedYear, selectedMonth, selectedDay]);
 
   // Current active minute prediction
   const currentMinuteData: MinuteTideData = useMemo(() => {
-    return calculateMinuteTide(2026, selectedMonth, selectedDay, selectedMinute);
-  }, [selectedMonth, selectedDay, selectedMinute]);
+    return calculateMinuteTide(selectedYear, selectedMonth, selectedDay, selectedMinute);
+  }, [selectedYear, selectedMonth, selectedDay, selectedMinute]);
 
   // UKC calculation for current active minute
   const ukcResult = useMemo(() => {
@@ -123,19 +143,124 @@ export const TideCalculatorView: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `MARE_BEIRA_2026_${selectedMonth.toString().padStart(2, '0')}_${selectedDay.toString().padStart(2, '0')}_MINUTO_A_MINUTO.csv`);
+    link.setAttribute('download', `MARE_BEIRA_${selectedYear}_${selectedMonth.toString().padStart(2, '0')}_${selectedDay.toString().padStart(2, '0')}_MINUTO_A_MINUTO.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Month labels
+  // List of available months
   const months = [
-    { value: 9, label: 'Setembro 2026' },
-    { value: 10, label: 'Outubro 2026' },
-    { value: 11, label: 'Novembro 2026' },
-    { value: 12, label: 'Dezembro 2026' }
+    { value: 1, label: 'Janeiro' },
+    { value: 2, label: 'Fevereiro' },
+    { value: 3, label: 'Março' },
+    { value: 4, label: 'Abril' },
+    { value: 5, label: 'Maio' },
+    { value: 6, label: 'Junho' },
+    { value: 7, label: 'Julho' },
+    { value: 8, label: 'Agosto' },
+    { value: 9, label: 'Setembro' },
+    { value: 10, label: 'Outubro' },
+    { value: 11, label: 'Novembro' },
+    { value: 12, label: 'Dezembro' }
   ];
+
+  // Available Years
+  const availableYears = [2025, 2026, 2027, 2028, 2029, 2030];
+
+  // Helper to format ISO date string YYYY-MM-DD
+  const currentDateStr = `${selectedYear}-${selectedMonth.toString().padStart(2, '0')}-${selectedDay.toString().padStart(2, '0')}`;
+
+  const handleDateInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.value) return;
+    const parts = e.target.value.split('-').map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      setSelectedYear(parts[0]);
+      setSelectedMonth(parts[1]);
+      setSelectedDay(parts[2]);
+    }
+  };
+
+  const handleJumpToToday = () => {
+    const today = new Date();
+    setSelectedYear(today.getFullYear());
+    setSelectedMonth(today.getMonth() + 1);
+    setSelectedDay(today.getDate());
+    setSelectedMinute(today.getHours() * 60 + today.getMinutes());
+  };
+
+  const handleJumpDays = (daysOffset: number) => {
+    const current = new Date(selectedYear, selectedMonth - 1, selectedDay);
+    const target = new Date(current.getTime() + daysOffset * 86400000);
+    setSelectedYear(target.getFullYear());
+    setSelectedMonth(target.getMonth() + 1);
+    setSelectedDay(target.getDate());
+  };
+
+  // Check if viewing today
+  const isViewingToday = useMemo(() => {
+    const today = new Date();
+    return today.getFullYear() === selectedYear &&
+           (today.getMonth() + 1) === selectedMonth &&
+           today.getDate() === selectedDay;
+  }, [selectedYear, selectedMonth, selectedDay]);
+
+  // Days offset from today
+  const daysOffsetFromToday = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(selectedYear, selectedMonth - 1, selectedDay);
+    target.setHours(0, 0, 0, 0);
+    return Math.round((target.getTime() - today.getTime()) / 86400000);
+  }, [selectedYear, selectedMonth, selectedDay]);
+
+  // Future tides data for the horizon planner
+  const futureTidesList = useMemo(() => {
+    const start = new Date(selectedYear, selectedMonth - 1, selectedDay);
+    return getFutureTidesList(start, futureHorizonDays);
+  }, [selectedYear, selectedMonth, selectedDay, futureHorizonDays]);
+
+  const filteredFutureTides = useMemo(() => {
+    return futureTidesList.filter(item => {
+      if (futureTypeFilter === 'vivas' && !item.tideType.includes('Vivas')) return false;
+      if (futureTypeFilter === 'mortas' && !item.tideType.includes('Mortas')) return false;
+      if (futureMinHWFilter > 0) {
+        const hasHW = item.extrema.some(e => e.type === 'HW' && e.height >= futureMinHWFilter);
+        if (!hasHW) return false;
+      }
+      if (futureSearchQuery.trim()) {
+        const q = futureSearchQuery.toLowerCase();
+        const match = item.dateStr.includes(q) ||
+                      item.dayOfWeek.toLowerCase().includes(q) ||
+                      item.tideType.toLowerCase().includes(q);
+        if (!match) return false;
+      }
+      return true;
+    });
+  }, [futureTidesList, futureTypeFilter, futureMinHWFilter, futureSearchQuery]);
+
+  const handleExportFutureCSV = () => {
+    const csvContent = exportFutureTidesToCSV(filteredFutureTides);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `PREVISAO_MARES_FUTURAS_BEIRA_${selectedYear}_${selectedMonth}_${selectedDay}_${futureHorizonDays}DIAS.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleSelectFutureDayInGraph = (dayItem: FutureDayTideOverview) => {
+    setSelectedYear(dayItem.year);
+    setSelectedMonth(dayItem.month);
+    setSelectedDay(dayItem.day);
+    setActiveTab('calculator');
+    const firstHW = dayItem.extrema.find(e => e.type === 'HW');
+    if (firstHW) {
+      setSelectedMinute(timeToMinutes(firstHW.time));
+    }
+  };
 
   // SVG Chart Geometry Constants
   const svgWidth = 1000;
@@ -227,12 +352,111 @@ export const TideCalculatorView: React.FC = () => {
           </div>
         </div>
 
-        {/* Date Selector Strip */}
-        <div className="mt-5 pt-4 border-t-2 border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Tab Navigation: Minute Curve vs Future Date Search */}
+        <div className="mt-5 border-t-2 border-slate-100 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl border-2 border-black">
+            <button
+              onClick={() => setActiveTab('calculator')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black transition-all ${
+                activeTab === 'calculator'
+                  ? 'bg-blue-900 text-white shadow'
+                  : 'text-slate-700 hover:text-black hover:bg-white/60'
+              }`}
+            >
+              <Waves className="w-4 h-4" />
+              <span>Curva Minuto a Minuto & UKC</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('future_search')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black transition-all ${
+                activeTab === 'future_search'
+                  ? 'bg-blue-900 text-white shadow'
+                  : 'text-slate-700 hover:text-black hover:bg-white/60'
+              }`}
+            >
+              <CalendarRange className="w-4 h-4 text-cyan-300" />
+              <span>Pesquisa de Datas Futuras</span>
+              <span className="text-[10px] bg-cyan-400 text-black px-1.5 py-0.2 rounded font-bold uppercase">
+                Agenda
+              </span>
+            </button>
+          </div>
+
+          {/* Current Date Status Badge */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {isViewingToday ? (
+              <div className="flex items-center gap-1.5 bg-emerald-100 border border-emerald-400 text-emerald-900 px-3 py-1.5 rounded-lg text-xs font-black">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-ping" />
+                <span>AO VIVO · Hoje ({selectedDay.toString().padStart(2, '0')}/{selectedMonth.toString().padStart(2, '0')}/{selectedYear})</span>
+              </div>
+            ) : daysOffsetFromToday > 0 ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-blue-100 border border-blue-400 text-blue-950 px-3 py-1.5 rounded-lg text-xs font-black">
+                  <CalendarDays className="w-3.5 h-3.5 text-blue-900" />
+                  <span>Data Futura: +{daysOffsetFromToday} {daysOffsetFromToday === 1 ? 'dia' : 'dias'} à frente ({selectedDay.toString().padStart(2, '0')}/{selectedMonth.toString().padStart(2, '0')}/{selectedYear})</span>
+                </div>
+                <button
+                  onClick={handleJumpToToday}
+                  className="bg-black hover:bg-slate-800 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg border border-black transition-all"
+                  title="Voltar para a maré de hoje"
+                >
+                  Voltar a Hoje
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-400 text-slate-800 px-3 py-1.5 rounded-lg text-xs font-black">
+                  <Clock className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Histórico ({Math.abs(daysOffsetFromToday)} dias atrás)</span>
+                </div>
+                <button
+                  onClick={handleJumpToToday}
+                  className="bg-black hover:bg-slate-800 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg border border-black transition-all"
+                  title="Voltar para a maré de hoje"
+                >
+                  Voltar a Hoje
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Unified Dynamic Date Selector Strip */}
+        <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {/* Quick Date Input (Direct calendar picker) */}
+          <div>
+            <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-blue-900" />
+              <span>Data Calendário</span>
+            </label>
+            <input
+              type="date"
+              value={currentDateStr}
+              onChange={handleDateInputChange}
+              className="w-full bg-white border-2 border-black rounded-lg px-3 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+            />
+          </div>
+
+          {/* Year Selector */}
+          <div>
+            <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+              Ano
+            </label>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(Number(e.target.value))}
+              className="w-full bg-white border-2 border-black rounded-lg px-3 py-2 text-sm font-bold text-black focus:ring-2 focus:ring-blue-900"
+            >
+              {availableYears.map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Month Selector */}
           <div>
             <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-              Mês de Previsão (2026)
+              Mês
             </label>
             <select
               value={selectedMonth}
@@ -248,13 +472,13 @@ export const TideCalculatorView: React.FC = () => {
           {/* Day Selector */}
           <div>
             <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-              Dia do Mês (1 a {maxDaysInMonth})
+              Dia (1 a {maxDaysInMonth})
             </label>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setSelectedDay(prev => Math.max(1, prev - 1))}
-                disabled={selectedDay <= 1}
-                className="p-2 border-2 border-black rounded-lg bg-white hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                onClick={() => handleJumpDays(-1)}
+                className="p-2 border-2 border-black rounded-lg bg-white hover:bg-slate-100"
+                title="Dia anterior"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -270,48 +494,76 @@ export const TideCalculatorView: React.FC = () => {
                 ))}
               </select>
               <button
-                onClick={() => setSelectedDay(prev => Math.min(maxDaysInMonth, prev + 1))}
-                disabled={selectedDay >= maxDaysInMonth}
-                className="p-2 border-2 border-black rounded-lg bg-white hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                onClick={() => handleJumpDays(1)}
+                className="p-2 border-2 border-black rounded-lg bg-white hover:bg-slate-100"
+                title="Dia seguinte"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          {/* Day Characteristics */}
+          {/* Quick Shortcuts */}
           <div>
             <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-              Regime de Maré do Dia
+              Atalhos Rápidos
             </label>
-            <div className="p-2 bg-blue-50 border-2 border-blue-900 rounded-lg text-xs flex items-center justify-between font-bold text-blue-950">
-              <span>{daySummary.tideType}</span>
-              <span className="bg-blue-900 text-white px-2 py-0.5 rounded text-[10px]">
-                Δ {daySummary.rangeMeters.toFixed(2)}m
-              </span>
+            <div className="grid grid-cols-3 gap-1">
+              <button
+                onClick={handleJumpToToday}
+                className="py-2 px-1 bg-blue-900 hover:bg-blue-800 text-white rounded-lg text-xs font-black uppercase tracking-wider border border-black shadow text-center"
+                title="Hoje"
+              >
+                Hoje
+              </button>
+              <button
+                onClick={() => handleJumpDays(1)}
+                className="py-2 px-1 bg-white hover:bg-slate-100 text-black rounded-lg text-xs font-black uppercase tracking-wider border-2 border-black text-center"
+                title="Amanhã"
+              >
+                +1d
+              </button>
+              <button
+                onClick={() => handleJumpDays(7)}
+                className="py-2 px-1 bg-white hover:bg-slate-100 text-black rounded-lg text-xs font-black uppercase tracking-wider border-2 border-black text-center"
+                title="+7 Dias"
+              >
+                +7d
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* Quick jump to Current Time */}
-          <div className="flex items-end">
-            <button
-              onClick={() => {
-                const now = new Date();
-                setSelectedMonth(9);
-                setSelectedDay(10);
-                setSelectedMinute(now.getHours() * 60 + now.getMinutes());
-              }}
-              className="w-full py-2 px-3 border-2 border-black bg-blue-900 hover:bg-blue-800 text-white rounded-lg text-xs font-black uppercase tracking-wider transition-colors shadow flex items-center justify-center gap-1.5"
-            >
-              <Clock className="w-3.5 h-3.5 text-cyan-300" />
-              <span>Maré de Hoje (10/09/2026)</span>
-            </button>
+        {/* Day Regime Characteristics Strip */}
+        <div className="mt-3 pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-slate-600">Regime deste dia:</span>
+            <span className={`px-2.5 py-1 rounded-md font-black border ${
+              daySummary.tideType.includes('Vivas')
+                ? 'bg-blue-100 text-blue-900 border-blue-300'
+                : daySummary.tideType.includes('Mortas')
+                ? 'bg-amber-100 text-amber-900 border-amber-300'
+                : 'bg-slate-100 text-slate-800 border-slate-300'
+            }`}>
+              {daySummary.tideType}
+            </span>
+            <span className="bg-slate-900 text-cyan-300 px-2.5 py-1 rounded-md font-mono font-bold">
+              Amplitude Δ: {daySummary.rangeMeters.toFixed(2)}m (Max: {daySummary.maxHeight.toFixed(2)}m / Min: {daySummary.minHeight.toFixed(2)}m)
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-slate-600 font-medium">
+            <Info className="w-3.5 h-3.5 text-blue-900" />
+            <span>Dados astronómicos contínuos calculados automaticamente para qualquer data</span>
           </div>
         </div>
       </div>
 
-      {/* Main Interactive Minute Gauge & Extrema Card */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Main Content: Either Minute-by-Minute Calculator or Future Dates Search Planner */}
+      {activeTab === 'calculator' ? (
+        <>
+          {/* Main Interactive Minute Gauge & Extrema Card */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Left: Minute-by-Minute Realtime Calculator Gauge (2 Cols) */}
         <div className="lg:col-span-2 bg-white border-2 border-black rounded-xl p-5 shadow-sm space-y-5">
@@ -500,10 +752,10 @@ export const TideCalculatorView: React.FC = () => {
             <div className="flex items-center justify-between border-b-2 border-slate-100 pb-2.5">
               <h3 className="text-xs font-black text-black uppercase tracking-wider flex items-center gap-1.5">
                 <TableIcon className="w-4 h-4 text-blue-900" />
-                Preamar & Baixa-mar (Doc. Oficial)
+                Preamar & Baixa-mar ({selectedYear === 2026 && selectedMonth >= 9 ? 'Doc. Oficial' : 'Harmónica Calibrada'})
               </h3>
               <span className="text-[10px] font-bold text-slate-500">
-                Dia {selectedDay}/{selectedMonth}/2026
+                Dia {selectedDay}/{selectedMonth}/{selectedYear}
               </span>
             </div>
 
@@ -1022,6 +1274,275 @@ export const TideCalculatorView: React.FC = () => {
           </button>
         </div>
       </div>
+      </>
+    ) : (
+      /* Tab 2: Future Dates Search & Nautical Horizon Planner */
+      <div className="space-y-6">
+        
+        {/* Banner & Horizon Selection Card */}
+        <div className="bg-white border-2 border-black rounded-xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b-2 border-slate-100 pb-4">
+            <div className="flex items-center gap-2">
+              <span className="p-2 bg-blue-900 text-white rounded-lg border border-black shadow">
+                <CalendarRange className="w-5 h-5" />
+              </span>
+              <div>
+                <h2 className="text-lg sm:text-xl font-black text-black">
+                  Pesquisa e Agenda de Marés Futuras
+                </h2>
+                <p className="text-xs text-slate-600 font-medium">
+                  Planeamento operacional e previsão harmónica contínua para o Porto da Beira a partir de {selectedDay.toString().padStart(2, '0')}/{selectedMonth.toString().padStart(2, '0')}/{selectedYear}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleExportFutureCSV}
+              className="flex items-center gap-1.5 bg-black hover:bg-slate-800 text-white font-bold px-3.5 py-2 rounded-lg text-xs border border-black shadow transition-all active:scale-95"
+              title="Descarregar tabela de marés futuras em formato CSV"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Exportar Agenda Futura ({futureHorizonDays} Dias)</span>
+            </button>
+          </div>
+
+          {/* Horizon Selection Buttons */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700 mr-1">
+                Horizonte Temporal:
+              </span>
+              {[7, 14, 30, 60, 90].map(days => (
+                <button
+                  key={days}
+                  onClick={() => setFutureHorizonDays(days)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black border transition-all ${
+                    futureHorizonDays === days
+                      ? 'bg-blue-900 text-white border-black shadow'
+                      : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300'
+                  }`}
+                >
+                  {days} Dias
+                </button>
+              ))}
+            </div>
+
+            <div className="text-xs font-bold text-slate-500">
+              Período: {filteredFutureTides.length > 0 ? `${filteredFutureTides[0].dateStr} até ${filteredFutureTides[filteredFutureTides.length - 1].dateStr}` : '—'}
+            </div>
+          </div>
+
+          {/* Filter Bar */}
+          <div className="pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Filter by High Water (PM) */}
+            <div>
+              <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1 flex items-center gap-1">
+                <Filter className="w-3 h-3 text-blue-900" />
+                <span>Preamar Mínima (Janela Operacional)</span>
+              </label>
+              <select
+                value={futureMinHWFilter}
+                onChange={(e) => setFutureMinHWFilter(Number(e.target.value))}
+                className="w-full bg-white border-2 border-black rounded-lg px-3 py-1.5 text-xs font-bold text-black focus:ring-2 focus:ring-blue-900"
+              >
+                <option value={0}>Todas as Alturas de Maré</option>
+                <option value={5.0}>PM ≥ 5.0 metros (Operação Normal)</option>
+                <option value={5.5}>PM ≥ 5.5 metros (Navios Médios/Grandes)</option>
+                <option value={6.0}>PM ≥ 6.0 metros (Calado Crítico / PanMax)</option>
+              </select>
+            </div>
+
+            {/* Filter by Tide Regime */}
+            <div>
+              <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                Regime Lunar / Tipo de Maré
+              </label>
+              <select
+                value={futureTypeFilter}
+                onChange={(e) => setFutureTypeFilter(e.target.value as 'all' | 'vivas' | 'mortas')}
+                className="w-full bg-white border-2 border-black rounded-lg px-3 py-1.5 text-xs font-bold text-black focus:ring-2 focus:ring-blue-900"
+              >
+                <option value="all">Todos os Regimes (Vivas, Mortas e Médias)</option>
+                <option value="vivas">Apenas Marés Vivas (Spring Tides)</option>
+                <option value="mortas">Apenas Marés Mortas (Neap Tides)</option>
+              </select>
+            </div>
+
+            {/* Free Search */}
+            <div>
+              <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1 flex items-center gap-1">
+                <Search className="w-3 h-3 text-blue-900" />
+                <span>Pesquisar por Dia ou Data</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Segunda, 2027, 15..."
+                value={futureSearchQuery}
+                onChange={(e) => setFutureSearchQuery(e.target.value)}
+                className="w-full bg-white border-2 border-black rounded-lg px-3 py-1.5 text-xs font-bold text-black placeholder:text-slate-400 focus:ring-2 focus:ring-blue-900"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Statistical KPI Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white border-2 border-black rounded-xl p-3 shadow-sm">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Dias Encontrados</span>
+            <div className="text-2xl font-black text-black font-mono mt-1">
+              {filteredFutureTides.length}
+              <span className="text-xs font-normal text-slate-500 ml-1">dias</span>
+            </div>
+          </div>
+
+          <div className="bg-white border-2 border-black rounded-xl p-3 shadow-sm">
+            <span className="text-[10px] font-black uppercase tracking-wider text-blue-900">Marés Vivas (Spring)</span>
+            <div className="text-2xl font-black text-blue-900 font-mono mt-1">
+              {filteredFutureTides.filter(t => t.tideType.includes('Vivas')).length}
+              <span className="text-xs font-normal text-slate-500 ml-1">dias</span>
+            </div>
+          </div>
+
+          <div className="bg-white border-2 border-black rounded-xl p-3 shadow-sm">
+            <span className="text-[10px] font-black uppercase tracking-wider text-amber-700">Marés Mortas (Neap)</span>
+            <div className="text-2xl font-black text-amber-700 font-mono mt-1">
+              {filteredFutureTides.filter(t => t.tideType.includes('Mortas')).length}
+              <span className="text-xs font-normal text-slate-500 ml-1">dias</span>
+            </div>
+          </div>
+
+          <div className="bg-white border-2 border-black rounded-xl p-3 shadow-sm">
+            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Maior Preamar (Pico)</span>
+            <div className="text-2xl font-black text-emerald-700 font-mono mt-1">
+              {filteredFutureTides.length > 0 
+                ? `${Math.max(...filteredFutureTides.map(t => t.maxHeight)).toFixed(2)}m`
+                : '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* Future Days List */}
+        {filteredFutureTides.length === 0 ? (
+          <div className="bg-white border-2 border-black rounded-xl p-10 text-center space-y-3 shadow-sm">
+            <Calendar className="w-10 h-10 text-slate-400 mx-auto" />
+            <h3 className="text-base font-black text-black">Nenhum dia encontrado para estes filtros</h3>
+            <p className="text-xs text-slate-600 max-w-md mx-auto">
+              Nenhuma data no horizonte de {futureHorizonDays} dias atende aos critérios selecionados. Tente reduzir o limite de preamar ou remover a pesquisa.
+            </p>
+            <button
+              onClick={() => {
+                setFutureMinHWFilter(0);
+                setFutureTypeFilter('all');
+                setFutureSearchQuery('');
+              }}
+              className="px-4 py-2 bg-blue-900 text-white rounded-lg text-xs font-bold border border-black"
+            >
+              Redefinir Filtros
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredFutureTides.map((dayItem) => {
+              const isToday = dayItem.year === now.getFullYear() &&
+                              dayItem.month === (now.getMonth() + 1) &&
+                              dayItem.day === now.getDate();
+              const isSelected = dayItem.year === selectedYear &&
+                                 dayItem.month === selectedMonth &&
+                                 dayItem.day === selectedDay;
+
+              const isSpring = dayItem.tideType.includes('Vivas');
+              const isNeap = dayItem.tideType.includes('Mortas');
+
+              return (
+                <div
+                  key={dayItem.dateStr}
+                  className={`bg-white border-2 rounded-xl p-4 shadow-sm flex flex-col justify-between space-y-3 transition-all ${
+                    isSelected 
+                      ? 'border-blue-900 ring-2 ring-blue-900 bg-blue-50/20' 
+                      : 'border-black hover:border-blue-900 hover:shadow-md'
+                  }`}
+                >
+                  {/* Card Header */}
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-black text-base text-black">
+                          {dayItem.day.toString().padStart(2, '0')}/{dayItem.month.toString().padStart(2, '0')}/{dayItem.year}
+                        </span>
+                        <span className="text-xs font-bold text-slate-600">
+                          ({dayItem.dayOfWeek})
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        {isToday && (
+                          <span className="bg-emerald-600 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded">
+                            Hoje
+                          </span>
+                        )}
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${
+                          isSpring 
+                            ? 'bg-blue-100 text-blue-900 border-blue-300' 
+                            : isNeap 
+                            ? 'bg-amber-100 text-amber-900 border-amber-300' 
+                            : 'bg-slate-100 text-slate-700 border-slate-300'
+                        }`}>
+                          {dayItem.tideType}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                      <span>Amplitude Δ: <strong className="text-black">{dayItem.rangeMeters.toFixed(2)}m</strong></span>
+                      <span>Min: {dayItem.minHeight.toFixed(2)}m · Max: {dayItem.maxHeight.toFixed(2)}m</span>
+                    </div>
+                  </div>
+
+                  {/* Extrema Details */}
+                  <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-200 space-y-1.5">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                      Eventos de Maré (ZH)
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {dayItem.extrema.map((ext, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-1.5 rounded flex items-center justify-between text-xs font-mono font-bold ${
+                            ext.type === 'HW'
+                              ? 'bg-blue-100/70 text-blue-950 border border-blue-200'
+                              : 'bg-amber-100/70 text-amber-950 border border-amber-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1">
+                            {ext.type === 'HW' ? (
+                              <ArrowUpRight className="w-3 h-3 text-blue-900 stroke-[3]" />
+                            ) : (
+                              <ArrowDownRight className="w-3 h-3 text-amber-700 stroke-[3]" />
+                            )}
+                            <span className="text-[10px] uppercase">{ext.type}</span>
+                            <span>{ext.time}</span>
+                          </div>
+                          <span className="font-black">{ext.height.toFixed(1)}m</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Action Button: Jump to Calculator */}
+                  <button
+                    onClick={() => handleSelectFutureDayInGraph(dayItem)}
+                    className="w-full py-2 px-3 bg-black hover:bg-blue-900 text-white rounded-lg text-xs font-black uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5 shadow"
+                  >
+                    <span>Abrir Curva Minuto a Minuto</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    )}
 
     </div>
   );

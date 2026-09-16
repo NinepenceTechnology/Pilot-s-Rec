@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   AlertOctagon, 
   AlertTriangle, 
@@ -33,6 +33,11 @@ export const AlertsView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAlert, setEditingAlert] = useState<MaritimeAlert | null>(null);
 
+  // Draft backup state
+  const ALERT_DRAFT_KEY = 'pilots_records_alert_form_draft_v2';
+  const [hasRestoredDraft, setHasRestoredDraft] = useState<boolean>(false);
+  const [draftToast, setDraftToast] = useState<string | null>(null);
+
   // Form State
   const [formTitle, setFormTitle] = useState('');
   const [formCategory, setFormCategory] = useState<AlertCategory>('canal_navegacao');
@@ -44,8 +49,57 @@ export const AlertsView: React.FC = () => {
   const [formValidUntil, setFormValidUntil] = useState('');
   const [formIsActive, setFormIsActive] = useState(true);
 
+  // Auto-save draft in background when modal is open and user is typing
+  useEffect(() => {
+    if (!isModalOpen || editingAlert) return;
+    if (!formTitle && !formDescription && !formLocation && !formActionRequired) return;
+
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(ALERT_DRAFT_KEY, JSON.stringify({
+          formTitle,
+          formCategory,
+          formSeverity,
+          formLocation,
+          formDescription,
+          formActionRequired,
+          formIssuedBy,
+          formValidUntil,
+          formIsActive,
+          savedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [isModalOpen, editingAlert, formTitle, formCategory, formSeverity, formLocation, formDescription, formActionRequired, formIssuedBy, formValidUntil, formIsActive]);
+
   const openNewModal = () => {
     setEditingAlert(null);
+    setHasRestoredDraft(false);
+
+    // Check if there is an unsaved draft
+    try {
+      const raw = localStorage.getItem(ALERT_DRAFT_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft && (draft.formTitle || draft.formDescription || draft.formLocation)) {
+          setFormTitle(draft.formTitle || '');
+          setFormCategory(draft.formCategory || 'canal_navegacao');
+          setFormSeverity(draft.formSeverity || 'alta');
+          setFormLocation(draft.formLocation || '');
+          setFormDescription(draft.formDescription || '');
+          setFormActionRequired(draft.formActionRequired || '');
+          setFormIssuedBy(draft.formIssuedBy || 'Capitania dos Portos / VTS');
+          setFormValidUntil(draft.formValidUntil || '');
+          setFormIsActive(draft.formIsActive ?? true);
+          setHasRestoredDraft(true);
+          setIsModalOpen(true);
+          return;
+        }
+      }
+    } catch {}
+
     setFormTitle('');
     setFormCategory('canal_navegacao');
     setFormSeverity('alta');
@@ -58,8 +112,39 @@ export const AlertsView: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const discardAlertDraft = () => {
+    try {
+      localStorage.removeItem(ALERT_DRAFT_KEY);
+    } catch {}
+    setHasRestoredDraft(false);
+    setFormTitle('');
+    setFormLocation('');
+    setFormDescription('');
+    setFormActionRequired('');
+  };
+
+  const handleManualSaveAlertDraft = () => {
+    try {
+      localStorage.setItem(ALERT_DRAFT_KEY, JSON.stringify({
+        formTitle,
+        formCategory,
+        formSeverity,
+        formLocation,
+        formDescription,
+        formActionRequired,
+        formIssuedBy,
+        formValidUntil,
+        formIsActive,
+        savedAt: new Date().toISOString()
+      }));
+      setDraftToast('Backup do rascunho guardado com sucesso.');
+      setTimeout(() => setDraftToast(null), 3500);
+    } catch {}
+  };
+
   const openEditModal = (alert: MaritimeAlert) => {
     setEditingAlert(alert);
+    setHasRestoredDraft(false);
     setFormTitle(alert.title);
     setFormCategory(alert.category);
     setFormSeverity(alert.severity);
@@ -74,32 +159,38 @@ export const AlertsView: React.FC = () => {
 
   const handleSaveAlert = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim() || !formDescription.trim()) return;
+    // Aceita salvar/guardar informações mesmo quando não estão preenchidas no total
+    const effectiveTitle = formTitle.trim() || 'Alerta Operacional Geral';
+    const effectiveDescription = formDescription.trim() || (formLocation.trim() ? `Restrição reportada em ${formLocation.trim()}` : 'Alerta operacional registrado.');
 
     if (editingAlert) {
       updateAlert(editingAlert.id, {
-        title: formTitle.trim(),
+        title: effectiveTitle,
         category: formCategory,
         severity: formSeverity,
         location: formLocation.trim() || undefined,
-        description: formDescription.trim(),
+        description: effectiveDescription,
         actionRequired: formActionRequired.trim() || undefined,
-        issuedBy: formIssuedBy.trim(),
+        issuedBy: formIssuedBy.trim() || 'Capitania dos Portos / VTS',
         validUntil: formValidUntil ? new Date(formValidUntil).toISOString() : undefined,
         isActive: formIsActive
       });
     } else {
       addAlert({
-        title: formTitle.trim(),
+        title: effectiveTitle,
         category: formCategory,
         severity: formSeverity,
         location: formLocation.trim() || undefined,
-        description: formDescription.trim(),
+        description: effectiveDescription,
         actionRequired: formActionRequired.trim() || undefined,
-        issuedBy: formIssuedBy.trim(),
+        issuedBy: formIssuedBy.trim() || 'Capitania dos Portos / VTS',
         validUntil: formValidUntil ? new Date(formValidUntil).toISOString() : undefined,
         isActive: formIsActive
       });
+      // Limpar rascunho após salvar
+      try {
+        localStorage.removeItem(ALERT_DRAFT_KEY);
+      } catch {}
     }
 
     setIsModalOpen(false);
@@ -460,13 +551,38 @@ export const AlertsView: React.FC = () => {
 
             {/* Modal Form */}
             <form onSubmit={handleSaveAlert} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              
+              {/* BANNER DE RESGATE DE RASCUNHO */}
+              {hasRestoredDraft && (
+                <div className="bg-amber-50 border border-amber-400 rounded-lg p-3 flex items-center justify-between gap-2 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+                    <p className="text-[11px] text-amber-900 font-bold">
+                      Rascunho recuperado automaticamente do backup anterior.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={discardAlertDraft}
+                    className="text-[10px] font-bold px-2 py-1 bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 rounded shadow-xs"
+                  >
+                    Descartar
+                  </button>
+                </div>
+              )}
+
+              {draftToast && (
+                <div className="p-2 bg-emerald-50 border border-emerald-400 text-emerald-950 text-xs font-bold rounded">
+                  {draftToast}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                  Título do Alerta *
+                  Título do Alerta
                 </label>
                 <input
                   type="text"
-                  required
                   placeholder="Ex: Restrição de Calado por Ressaca ou Manutenção de Bóia"
                   value={formTitle}
                   onChange={(e) => setFormTitle(e.target.value)}
@@ -529,7 +645,6 @@ export const AlertsView: React.FC = () => {
                   </label>
                   <input
                     type="text"
-                    required
                     placeholder="Ex: Capitania dos Portos, VTS, Pilotagem"
                     value={formIssuedBy}
                     onChange={(e) => setFormIssuedBy(e.target.value)}
@@ -540,10 +655,9 @@ export const AlertsView: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                  Descrição Detalhada do Alerta *
+                  Descrição Detalhada do Alerta
                 </label>
                 <textarea
-                  required
                   rows={3}
                   placeholder="Descreva as condições observadas, causa técnica ou instrução regulamentar..."
                   value={formDescription}
@@ -592,20 +706,32 @@ export const AlertsView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-300"
+                  onClick={handleManualSaveAlertDraft}
+                  className="px-3 py-2 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-300 flex items-center gap-1.5"
+                  title="Salvar rascunho de backup"
                 >
-                  Cancelar
+                  <Clock className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Guardar Rascunho / Backup</span>
                 </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 text-xs font-black text-white bg-blue-900 hover:bg-blue-800 rounded-lg border border-black shadow"
-                >
-                  {editingAlert ? 'Salvar Alterações' : 'Criar Alerta'}
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-300"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 text-xs font-black text-white bg-blue-900 hover:bg-blue-800 rounded-lg border border-black shadow"
+                  >
+                    {editingAlert ? 'Salvar Alterações' : 'Salvar Alerta (Aceita Parcial)'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
