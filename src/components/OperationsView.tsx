@@ -196,9 +196,11 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                       {m.maneuverType.toUpperCase()}
                     </span>
 
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-300">
-                      {m.berthingModel || 'Costado Bombordo (BB)'}
-                    </span>
+                    {m.maneuverType !== 'desatracacao' && m.berthingModel && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-300">
+                        {m.berthingModel}
+                      </span>
+                    )}
 
                     {m.photoUrl && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">

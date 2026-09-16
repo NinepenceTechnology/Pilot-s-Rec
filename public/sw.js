@@ -1,5 +1,5 @@
-// Pilot's Records Service Worker - Suporte Offline para Dispositivos
-const CACHE_NAME = 'pilots-records-v2';
+// Pilot's Records Service Worker - Auto-Update & Suporte Offline para Dispositivos
+const CACHE_NAME = 'pilots-records-v3.2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -14,6 +14,7 @@ const ASSETS_TO_CACHE = [
   '/favicon-32.png'
 ];
 
+// 1. Instalação do Service Worker - ativação imediata sem esperar
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -23,20 +24,54 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
+// 2. Ativação do Service Worker - purga caches antigas e assume controlo de imediato
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
+// 3. Mensagem para forçar skipWaiting se solicitado pelo cliente
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+// 4. Interceção de requisições
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-  
+
+  // Não intercetar chamadas de API
+  if (event.request.url.includes('/api/')) return;
+
+  // ESTRATÉGIA NETWORK-FIRST PARA NAVEGAÇÃO / HTML:
+  // Se estiver online, obtém SEMPRE a versão mais recente do HTML (com novos hashes de bundle).
+  // Se estiver offline ou a rede falhar, recorre à versão em cache.
+  if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cached) => cached || caches.match('/index.html'));
+        })
+    );
+    return;
+  }
+
+  // ESTRATÉGIA PARA OUTROS ASSETS (JS, CSS, IMAGENS): Cache-First com atualização
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
@@ -54,19 +89,10 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => {
-          // Se estiver offline e for navegação de página, retorna index em cache
           if (event.request.mode === 'navigate') {
             return caches.match('/index.html');
           }
         });
     })
   );
-});
-// --- Forçar atualização imediata após nova compilação ---
-self.addEventListener("install", (event) => {
-  self.skipWaiting(); // ativa logo após instalação
-});
-
-self.addEventListener("activate", (event) => {
-  self.clients.claim(); // assume controlo de todas as páginas abertas
 });

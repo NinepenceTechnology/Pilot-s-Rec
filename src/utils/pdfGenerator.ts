@@ -110,6 +110,7 @@ export async function generatePilotageManeuverPDF(
 
   currentY += 10;
 
+  const isDesatracacao = record.maneuverType === 'desatracacao';
   const tipoLabel = (record.maneuverType || 'ATRACAÇÃO').toUpperCase();
   const modeloAtracacao = record.berthingModel || 'Costado Bombordo (BB)';
   const primeiroCabo = record.firstLineAshored || record.milestones.firstLineAshored || 'N/A';
@@ -120,7 +121,9 @@ export async function generatePilotageManeuverPDF(
   const maneuverData = [
     [
       { label: 'TIPO DE MANOBRA:', val: tipoLabel },
-      { label: 'MODELO DE ATRACAÇÃO:', val: modeloAtracacao },
+      isDesatracacao
+        ? { label: 'CAIS DE DESATRACAÇÃO:', val: record.berthTo || 'Cais do Porto' }
+        : { label: 'MODELO DE ATRACAÇÃO:', val: modeloAtracacao },
       { label: 'TEMPO DE MANOBRAS:', val: tempoManobra }
     ],
     [
@@ -129,7 +132,7 @@ export async function generatePilotageManeuverPDF(
       { label: 'ATRACAÇÃO:', val: atracacao }
     ],
     [
-      { label: 'BERÇO / CAIS:', val: `${record.berthFrom ? `${record.berthFrom} ➔ ` : ''}${record.berthTo}` },
+      { label: 'BERÇO / CAIS:', val: `${record.berthFrom ? `${record.berthFrom} ➔ ` : ''}${record.berthTo || 'Cais'}` },
       { label: 'PILOTO RESPONSÁVEL:', val: record.pilotName },
       { label: 'STATUS DA OPERAÇÃO:', val: (record.status || 'CONCLUÍDA').toUpperCase() }
     ]

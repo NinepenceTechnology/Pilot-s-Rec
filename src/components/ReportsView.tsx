@@ -390,13 +390,17 @@ export const ReportsView: React.FC = () => {
                   <span className="font-black text-blue-900 uppercase">{formatManeuverType(selectedManeuver.maneuverType)}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 font-bold block text-[10px]">Local / Berço Destino</span>
-                  <span className="font-bold text-slate-900">{selectedManeuver.berthTo}</span>
+                  <span className="text-slate-500 font-bold block text-[10px]">
+                    {selectedManeuver.maneuverType === 'desatracacao' ? 'Local / Berço Saída' : 'Local / Berço Destino'}
+                  </span>
+                  <span className="font-bold text-slate-900">{selectedManeuver.berthTo || 'Cais'}</span>
                 </div>
-                <div>
-                  <span className="text-slate-500 font-bold block text-[10px]">Modelo Atracação</span>
-                  <span className="font-medium">{selectedManeuver.berthingModel || 'Bombordo (BB)'}</span>
-                </div>
+                {selectedManeuver.maneuverType !== 'desatracacao' && (
+                  <div>
+                    <span className="text-slate-500 font-bold block text-[10px]">Modelo Atracação</span>
+                    <span className="font-medium">{selectedManeuver.berthingModel || 'Bombordo (BB)'}</span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-500 font-bold block text-[10px]">Piloto Responsável</span>
                   <span className="font-black text-slate-900">{selectedManeuver.pilotName}</span>

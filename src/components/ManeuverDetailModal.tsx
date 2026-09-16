@@ -170,7 +170,9 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
           <div className="border-2 border-slate-300 rounded-lg p-4 bg-white space-y-3">
             <h3 className="text-xs font-black uppercase tracking-wider text-blue-900 flex items-center gap-2 border-b border-slate-200 pb-1.5">
               <Clock className="w-4 h-4 text-blue-700" />
-              2. HORÁRIOS DA OPERAÇÃO, MODELO DE ATRACAÇÃO & TEMPO DE MANOBRA
+              {maneuver.maneuverType === 'desatracacao'
+                ? '2. HORÁRIOS DA OPERAÇÃO DE DESATRACAÇÃO & TEMPO DE MANOBRA'
+                : '2. HORÁRIOS DA OPERAÇÃO, MODELO DE ATRACAÇÃO & TEMPO DE MANOBRA'}
             </h3>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -200,13 +202,15 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-              <div className="p-2 bg-slate-50 rounded border border-slate-300">
-                <span className="text-[10px] text-slate-500 font-bold block">MODELO DE ATRACAÇÃO</span>
-                <span className="font-bold text-black text-sm">
-                  {maneuver.berthingModel || 'Costado Bombordo (BB)'}
-                </span>
-              </div>
+            <div className={`grid grid-cols-1 ${maneuver.maneuverType === 'desatracacao' ? '' : 'sm:grid-cols-2'} gap-3 text-xs pt-1`}>
+              {maneuver.maneuverType !== 'desatracacao' && (
+                <div className="p-2 bg-slate-50 rounded border border-slate-300">
+                  <span className="text-[10px] text-slate-500 font-bold block">MODELO DE ATRACAÇÃO</span>
+                  <span className="font-bold text-black text-sm">
+                    {maneuver.berthingModel || 'Costado Bombordo (BB)'}
+                  </span>
+                </div>
+              )}
               <div className="p-2 bg-slate-50 rounded border border-slate-300">
                 <span className="text-[10px] text-slate-500 font-bold block">PILOTO RESPONSÁVEL</span>
                 <span className="font-bold text-black text-sm">{maneuver.pilotName}</span>
