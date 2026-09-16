@@ -18,7 +18,8 @@ import {
 import { useMaritime } from '../context/MaritimeContext';
 import { formatDateTime } from '../utils/formatters';
 import { generatePilotageManeuverPDF } from '../utils/pdfGenerator';
-import { ManeuverRecord } from '../types/maritime';
+import { ManeuverRecord, ManeuverAttachment } from '../types/maritime';
+import { AttachmentManager } from './AttachmentManager';
 
 interface ManeuverDetailModalProps {
   maneuverId: string | null;
@@ -43,6 +44,29 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
   const [remarks, setRemarks] = useState(maneuver.pilotRemarks || '');
   const [isEditingRemarks, setIsEditingRemarks] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  // Normalizar anexos existentes ou foto legada
+  const currentAttachments: ManeuverAttachment[] = maneuver.attachments && maneuver.attachments.length > 0
+    ? maneuver.attachments
+    : (maneuver.photoUrl ? [{
+        id: 'legacy-photo-view',
+        name: maneuver.photoTitle || 'Foto Oficial da Manobra',
+        category: 'pilot_slip' as const,
+        dataUrl: maneuver.photoUrl,
+        fileType: 'image' as const,
+        mimeType: 'image/jpeg',
+        uploadedAt: maneuver.createdAt,
+        caption: maneuver.photoTitle
+      }] : []);
+
+  const handleAttachmentsChange = (newAtts: ManeuverAttachment[]) => {
+    const firstImg = newAtts.find(a => a.fileType === 'image');
+    updateManeuver(maneuver.id, {
+      attachments: newAtts,
+      photoUrl: firstImg?.dataUrl || undefined,
+      photoTitle: newAtts[0]?.name || undefined
+    });
+  };
 
   const handleSaveRemarks = () => {
     updateManeuver(maneuver.id, { pilotRemarks: remarks });
@@ -284,37 +308,12 @@ export const ManeuverDetailModal: React.FC<ManeuverDetailModalProps> = ({
             )}
           </div>
 
-          {/* Seção 5: Foto Anexa que vira PDF */}
-          <div className="border-2 border-black rounded-lg p-4 bg-blue-50/60 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase text-blue-900 flex items-center gap-2">
-                <Camera className="w-4 h-4 text-blue-800" />
-                5. ANEXO FOTOGRÁFICO DO REGISTO
-              </h3>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-blue-900 text-white">
-                {maneuver.photoUrl ? 'Foto Anexada ao PDF' : 'Sem Anexo Fotográfico'}
-              </span>
-            </div>
-
-            {maneuver.photoUrl ? (
-              <div className="space-y-2">
-                <div className="rounded-lg overflow-hidden border-2 border-black max-h-60 bg-black flex items-center justify-center">
-                  <img
-                    src={maneuver.photoUrl}
-                    alt="Anexo Fotográfico da Manobra"
-                    className="max-h-60 w-auto object-contain"
-                  />
-                </div>
-                <p className="text-[11px] text-slate-600">
-                  {maneuver.photoTitle || 'Comprovante fotográfico anexado à folha oficial de manobra.'}
-                </p>
-              </div>
-            ) : (
-              <div className="p-4 bg-white border border-dashed border-slate-400 rounded-lg text-center text-xs text-slate-500">
-                Nenhuma foto foi anexada neste registo. Pode anexar ao criar uma nova manobra.
-              </div>
-            )}
-          </div>
+          {/* Seção 5: Centro de Anexos Oficiais da Manobra */}
+          <AttachmentManager
+            attachments={currentAttachments}
+            onChange={handleAttachmentsChange}
+            title="5. ANEXOS OFICIAIS DA MANOBRA (BILHETES, CALADOS, FOTOS E DOCUMENTOS)"
+          />
 
         </div>
 

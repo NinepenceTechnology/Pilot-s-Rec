@@ -10,7 +10,8 @@ import {
   IncidentRecord,
   UserPilotProfile,
   PilotRank,
-  MaritimeAlert
+  MaritimeAlert,
+  ManeuverAttachment
 } from '../types/maritime';
 import { 
   INITIAL_VESSELS, 
@@ -75,10 +76,20 @@ interface MaritimeContextType {
   restorePilotBackup: (backupData: any) => boolean;
   switchPilotByName: (name: string) => boolean;
   
+  // Sincronização em tempo real entre dispositivos
+  isOnline: boolean;
+  isRealtimeConnected: boolean;
+  activeSyncDevices: number;
+  lastSyncTime: string | null;
+  refreshAlertsNow: () => Promise<void>;
+
   // Actions
   addManeuver: (maneuver: Omit<ManeuverRecord, 'id' | 'createdAt' | 'updatedAt'>) => string;
   updateManeuver: (id: string, updates: Partial<ManeuverRecord>) => void;
   deleteManeuver: (id: string) => void;
+  addAttachmentToManeuver: (maneuverId: string, attachment: ManeuverAttachment) => void;
+  removeAttachmentFromManeuver: (maneuverId: string, attachmentId: string) => void;
+  updateAttachmentInManeuver: (maneuverId: string, attachmentId: string, updates: Partial<ManeuverAttachment>) => void;
   updateMilestone: (maneuverId: string, milestoneKey: keyof TimeMilestones, timeString?: string) => void;
   completeManeuver: (maneuverId: string, remarks?: string) => void;
   cancelManeuverWithIncident: (maneuverId: string, incident: IncidentRecord, remarks?: string) => void;
@@ -336,6 +347,32 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  // Estado de sincronização em tempo real entre dispositivos
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState<boolean>(false);
+  const [activeSyncDevices, setActiveSyncDevices] = useState<number>(1);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  // Sinal sonoro suave ao receber alerta urgente de outro utilizador/dispositivo
+  const playAlertAudioChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    } catch {}
+  };
+
   const [terminals] = useState<PortTerminal[]>(INITIAL_TERMINALS);
 
   // Sync to localStorage
@@ -415,64 +452,163 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => clearInterval(timer);
   }, []);
 
-  // Global Cross-User Synchronization: Sync Alerts & Maneuvers with Server and other tabs
+  // Função para sincronizar alertas com o servidor (autoritativo para todos os dispositivos)
+  const syncAlertsWithServer = async () => {
+    try {
+      const res = await fetch('/api/shared/alerts', { 
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.alerts)) {
+        setAlerts(data.alerts);
+        if (data.activeDeviceCount) {
+          setActiveSyncDevices(data.activeDeviceCount);
+        }
+        setLastSyncTime(new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        try {
+          localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(data.alerts));
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Falha na sincronização de alertas com servidor:', e);
+    }
+  };
+
+  const syncManeuversWithServer = async () => {
+    try {
+      const res = await fetch('/api/shared/maneuvers', { 
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.maneuvers)) {
+        setManeuvers(prev => {
+          const merged = mergeManeuvers(prev, data.maneuvers);
+          try {
+            localStorage.setItem(STORAGE_KEYS.MANEUVERS, JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+      }
+    } catch {}
+  };
+
+  const refreshAlertsNow = async () => {
+    await Promise.all([syncAlertsWithServer(), syncManeuversWithServer()]);
+  };
+
+  // 1. Conexão em Tempo Real via Server-Sent Events (SSE) para sincronização instantânea entre dispositivos
   useEffect(() => {
-    const syncAlertsWithServer = async () => {
+    let sse: EventSource | null = null;
+    let reconnectTimer: any = null;
+    let isSubscribed = true;
+
+    const connectSseStream = () => {
+      if (!isSubscribed) return;
+      if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+
       try {
-        const res = await fetch('/api/shared/alerts');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.success && Array.isArray(data.alerts)) {
-          setAlerts(prev => {
-            const merged = mergeAlerts(prev, data.alerts);
-            try {
-              localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
-        }
-      } catch {}
+        sse = new EventSource('/api/shared/events');
+
+        sse.onopen = () => {
+          if (!isSubscribed) return;
+          setIsRealtimeConnected(true);
+        };
+
+        sse.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'CONNECTED') {
+              setIsRealtimeConnected(true);
+              if (data.clientCount) setActiveSyncDevices(data.clientCount);
+              if (Array.isArray(data.alerts)) {
+                setAlerts(data.alerts);
+                try {
+                  localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(data.alerts));
+                } catch {}
+                setLastSyncTime(new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+              }
+            } else if (data.type === 'ALERT_SYNC' && data.payload) {
+              if (Array.isArray(data.payload.alerts)) {
+                setAlerts(data.payload.alerts);
+                try {
+                  localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(data.payload.alerts));
+                } catch {}
+                setLastSyncTime(new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+                
+                // Disparar toque suave para avisar o piloto de novo alerta urgente
+                if (data.payload.action === 'UPSERT') {
+                  playAlertAudioChime();
+                }
+              }
+            } else if (data.type === 'MANEUVER_SYNC' && data.payload) {
+              if (Array.isArray(data.payload.maneuvers)) {
+                setManeuvers(prev => mergeManeuvers(prev, data.payload.maneuvers));
+              }
+            } else if (data.type === 'PING') {
+              setIsRealtimeConnected(true);
+              if (data.activeClients) setActiveSyncDevices(data.activeClients);
+            }
+          } catch {}
+        };
+
+        sse.onerror = () => {
+          if (!isSubscribed) return;
+          setIsRealtimeConnected(false);
+          sse?.close();
+          sse = null;
+          // Reconectar após 3 segundos
+          reconnectTimer = setTimeout(connectSseStream, 3000);
+        };
+      } catch {
+        setIsRealtimeConnected(false);
+      }
     };
 
-    const syncManeuversWithServer = async () => {
-      try {
-        const res = await fetch('/api/shared/maneuvers');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.success && Array.isArray(data.maneuvers)) {
-          setManeuvers(prev => {
-            const merged = mergeManeuvers(prev, data.maneuvers);
-            try {
-              localStorage.setItem(STORAGE_KEYS.MANEUVERS, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
-        }
-      } catch {}
-    };
+    connectSseStream();
 
-    // Initial sync
+    return () => {
+      isSubscribed = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (sse) sse.close();
+    };
+  }, []);
+
+  // 2. Fallback Polling & Inter-Tab BroadcastChannel
+  useEffect(() => {
+    // Sincronização inicial
     syncAlertsWithServer();
     syncManeuversWithServer();
 
-    // Periodic sync every 12 seconds when online
+    // Fallback polling a cada 4 segundos caso o dispositivo esteja no telemóvel ou SSE seja interrompido
     const intervalId = setInterval(() => {
       if (typeof navigator === 'undefined' || navigator.onLine) {
         syncAlertsWithServer();
         syncManeuversWithServer();
       }
-    }, 12000);
+    }, 4000);
 
-    // Sync on reconnections or window focus
+    // Sincronização ao voltar o foco ou reconectar internet
     const handleSyncTrigger = () => {
+      setIsOnline(navigator.onLine);
       syncAlertsWithServer();
       syncManeuversWithServer();
     };
 
+    const handleOffline = () => {
+      setIsOnline(false);
+      setIsRealtimeConnected(false);
+    };
+
     window.addEventListener('online', handleSyncTrigger);
+    window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', handleSyncTrigger);
 
-    // Listen to storage events from other windows/tabs in the same browser
+    // Sincronização com abas locais via storage
     const handleStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEYS.ALERTS && e.newValue) {
         try {
@@ -489,14 +625,26 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     window.addEventListener('storage', handleStorage);
 
-    // Listen to BroadcastChannel for instant inter-session sync
+    // BroadcastChannel local
     if (syncChannel) {
       syncChannel.onmessage = (event) => {
         const { type, payload } = event.data || {};
         if (type === 'ALERT_UPSERT' && payload) {
-          setAlerts(prev => mergeAlerts(prev, [payload]));
+          setAlerts(prev => {
+            const next = [payload, ...prev.filter(a => a.id !== payload.id)];
+            try {
+              localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(next));
+            } catch {}
+            return next;
+          });
         } else if (type === 'ALERT_DELETE' && payload) {
-          setAlerts(prev => prev.filter(a => a.id !== payload));
+          setAlerts(prev => {
+            const next = prev.filter(a => a.id !== payload);
+            try {
+              localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(next));
+            } catch {}
+            return next;
+          });
         } else if (type === 'MANEUVER_UPSERT' && payload) {
           setManeuvers(prev => mergeManeuvers(prev, [payload]));
         } else if (type === 'SYNC_ALL') {
@@ -509,6 +657,7 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => {
       clearInterval(intervalId);
       window.removeEventListener('online', handleSyncTrigger);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', handleSyncTrigger);
       window.removeEventListener('storage', handleStorage);
     };
@@ -577,6 +726,94 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updatedItem = {
           ...m,
           ...updates,
+          updatedAt: new Date().toISOString()
+        };
+        return updatedItem;
+      }
+      return m;
+    }));
+
+    if (updatedItem) {
+      try {
+        fetch('/api/shared/maneuvers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maneuver: updatedItem })
+        }).catch(() => {});
+      } catch {}
+      broadcastSharedEvent('MANEUVER_UPSERT', updatedItem);
+    }
+  };
+
+  const addAttachmentToManeuver = (maneuverId: string, attachment: ManeuverAttachment) => {
+    let updatedItem: ManeuverRecord | null = null;
+    setManeuvers(prev => prev.map(m => {
+      if (m.id === maneuverId) {
+        const existing = m.attachments || [];
+        const updatedAttachments = [...existing, attachment];
+        updatedItem = {
+          ...m,
+          attachments: updatedAttachments,
+          // Compatibilidade com photoUrl caso ainda não exista
+          photoUrl: m.photoUrl || (attachment.fileType === 'image' ? attachment.dataUrl : undefined),
+          photoTitle: m.photoTitle || attachment.name,
+          updatedAt: new Date().toISOString()
+        };
+        return updatedItem;
+      }
+      return m;
+    }));
+
+    if (updatedItem) {
+      try {
+        fetch('/api/shared/maneuvers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maneuver: updatedItem })
+        }).catch(() => {});
+      } catch {}
+      broadcastSharedEvent('MANEUVER_UPSERT', updatedItem);
+    }
+  };
+
+  const removeAttachmentFromManeuver = (maneuverId: string, attachmentId: string) => {
+    let updatedItem: ManeuverRecord | null = null;
+    setManeuvers(prev => prev.map(m => {
+      if (m.id === maneuverId) {
+        const filtered = (m.attachments || []).filter(a => a.id !== attachmentId);
+        const firstImage = filtered.find(a => a.fileType === 'image');
+        updatedItem = {
+          ...m,
+          attachments: filtered,
+          photoUrl: firstImage ? firstImage.dataUrl : undefined,
+          photoTitle: firstImage ? firstImage.name : undefined,
+          updatedAt: new Date().toISOString()
+        };
+        return updatedItem;
+      }
+      return m;
+    }));
+
+    if (updatedItem) {
+      try {
+        fetch('/api/shared/maneuvers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maneuver: updatedItem })
+        }).catch(() => {});
+      } catch {}
+      broadcastSharedEvent('MANEUVER_UPSERT', updatedItem);
+    }
+  };
+
+  const updateAttachmentInManeuver = (maneuverId: string, attachmentId: string, updates: Partial<ManeuverAttachment>) => {
+    let updatedItem: ManeuverRecord | null = null;
+    setManeuvers(prev => prev.map(m => {
+      if (m.id === maneuverId) {
+        const updated = (m.attachments || []).map(a => a.id === attachmentId ? { ...a, ...updates } : a);
+        updatedItem = {
+          ...m,
+          attachments: updated,
           updatedAt: new Date().toISOString()
         };
         return updatedItem;
@@ -1047,10 +1284,12 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Alertas Portuários - Compartilhados com TODOS os utilizadores do app
   const addAlert = (alertData: Omit<MaritimeAlert, 'id' | 'issuedAt'>): string => {
     const id = `alt-${Date.now().toString().slice(-6)}`;
+    const nowIso = new Date().toISOString();
     const newAlert: MaritimeAlert = {
       ...alertData,
       id,
-      issuedAt: new Date().toISOString()
+      issuedAt: nowIso,
+      updatedAt: nowIso
     };
     
     setAlerts(prev => {
@@ -1063,23 +1302,32 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     // Server & Broadcast Synchronization
     broadcastSharedEvent('ALERT_UPSERT', newAlert);
-    try {
-      fetch('/api/shared/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ alert: newAlert })
-      }).catch(() => {});
-    } catch {}
+    fetch('/api/shared/alerts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alert: newAlert }),
+      keepalive: true
+    }).catch(() => {
+      // Retry once after 1s
+      setTimeout(() => {
+        fetch('/api/shared/alerts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alert: newAlert })
+        }).catch(() => {});
+      }, 1000);
+    });
 
     return id;
   };
 
   const updateAlert = (id: string, updates: Partial<MaritimeAlert>) => {
     let updatedItem: MaritimeAlert | null = null;
+    const nowIso = new Date().toISOString();
     setAlerts(prev => {
       const next = prev.map(a => {
         if (a.id === id) {
-          updatedItem = { ...a, ...updates };
+          updatedItem = { ...a, ...updates, updatedAt: nowIso };
           return updatedItem;
         }
         return a;
@@ -1092,22 +1340,22 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (updatedItem) {
       broadcastSharedEvent('ALERT_UPSERT', updatedItem);
-      try {
-        fetch('/api/shared/alerts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ alert: updatedItem })
-        }).catch(() => {});
-      } catch {}
+      fetch('/api/shared/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert: updatedItem }),
+        keepalive: true
+      }).catch(() => {});
     }
   };
 
   const toggleAlertActive = (id: string) => {
     let updatedItem: MaritimeAlert | null = null;
+    const nowIso = new Date().toISOString();
     setAlerts(prev => {
       const next = prev.map(a => {
         if (a.id === id) {
-          updatedItem = { ...a, isActive: !a.isActive };
+          updatedItem = { ...a, isActive: !a.isActive, updatedAt: nowIso };
           return updatedItem;
         }
         return a;
@@ -1120,13 +1368,12 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (updatedItem) {
       broadcastSharedEvent('ALERT_UPSERT', updatedItem);
-      try {
-        fetch('/api/shared/alerts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ alert: updatedItem })
-        }).catch(() => {});
-      } catch {}
+      fetch('/api/shared/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert: updatedItem }),
+        keepalive: true
+      }).catch(() => {});
     }
   };
 
@@ -1140,11 +1387,10 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
 
     broadcastSharedEvent('ALERT_DELETE', id);
-    try {
-      fetch(`/api/shared/alerts?id=${encodeURIComponent(id)}`, {
-        method: 'DELETE'
-      }).catch(() => {});
-    } catch {}
+    fetch(`/api/shared/alerts?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      keepalive: true
+    }).catch(() => {});
   };
 
   // Import / Export Excel (.xlsx) & Backup JSON
@@ -1273,6 +1519,9 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addManeuver,
         updateManeuver,
         deleteManeuver,
+        addAttachmentToManeuver,
+        removeAttachmentFromManeuver,
+        updateAttachmentInManeuver,
         updateMilestone,
         completeManeuver,
         cancelManeuverWithIncident,
@@ -1291,7 +1540,12 @@ export const MaritimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         exportManeuversToXlsx,
         exportFullBackup,
         importManeuversBatch,
-        restoreFullBackup
+        restoreFullBackup,
+        isOnline,
+        isRealtimeConnected,
+        activeSyncDevices,
+        lastSyncTime,
+        refreshAlertsNow
       }}
     >
       {children}

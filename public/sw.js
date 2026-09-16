@@ -1,5 +1,5 @@
 // Pilot's Records Service Worker - Auto-Update & Suporte Offline para Dispositivos
-const CACHE_NAME = 'pilots-records-v3.2';
+const CACHE_NAME = 'pilots-records-v3.4';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

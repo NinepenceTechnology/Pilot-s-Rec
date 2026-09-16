@@ -179,6 +179,9 @@ function sharedSyncPlugin(): Plugin {
   const alertsFile = path.resolve(dataDir, 'shared_alerts.json');
   const maneuversFile = path.resolve(dataDir, 'shared_maneuvers.json');
 
+  // Active Server-Sent Events (SSE) connections across all connected devices
+  const sseClients: any[] = [];
+
   const ensureDataFiles = () => {
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -188,6 +191,17 @@ function sharedSyncPlugin(): Plugin {
     }
     if (!fs.existsSync(maneuversFile)) {
       fs.writeFileSync(maneuversFile, '[]', 'utf8');
+    }
+  };
+
+  const notifyAllSseClients = (eventType: string, payload: any) => {
+    const rawData = `data: ${JSON.stringify({ type: eventType, payload, timestamp: Date.now() })}\n\n`;
+    for (let i = sseClients.length - 1; i >= 0; i--) {
+      try {
+        sseClients[i].write(rawData);
+      } catch {
+        sseClients.splice(i, 1);
+      }
     }
   };
 
@@ -206,24 +220,79 @@ function sharedSyncPlugin(): Plugin {
   };
 
   const handleRoutes = async (req: any, res: any, next: any) => {
-    if (!req.url || !req.url.startsWith('/api/shared/')) {
+    if (!req.url || !req.url.startsWith('/api/')) {
+      return next();
+    }
+
+    // Comprehensive CORS Headers for all API routes across devices & capacitor webviews
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cache-Control');
+
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (!req.url.startsWith('/api/shared/')) {
       return next();
     }
 
     ensureDataFiles();
     const parsedUrl = new URL(req.url, 'http://localhost');
-    res.setHeader('Content-Type', 'application/json');
 
     try {
+      // Real-time Server-Sent Events (SSE) stream for instant cross-device synchronization
+      if (parsedUrl.pathname === '/api/shared/events') {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+        // Send initial connection event with current state
+        let currentAlerts: any[] = [];
+        try {
+          currentAlerts = JSON.parse(fs.readFileSync(alertsFile, 'utf8') || '[]');
+        } catch {
+          currentAlerts = [];
+        }
+
+        res.write(`data: ${JSON.stringify({ 
+          type: 'CONNECTED', 
+          message: 'Canal de Sincronização em Tempo Real Estabelecido',
+          clientCount: sseClients.length + 1,
+          alerts: currentAlerts,
+          timestamp: Date.now() 
+        })}\n\n`);
+
+        sseClients.push(res);
+
+        req.on('close', () => {
+          const idx = sseClients.indexOf(res);
+          if (idx >= 0) sseClients.splice(idx, 1);
+        });
+        return;
+      }
+
       // Shared Alerts Endpoint
       if (parsedUrl.pathname === '/api/shared/alerts') {
+        res.setHeader('Content-Type', 'application/json');
+
         if (req.method === 'GET') {
           const content = fs.readFileSync(alertsFile, 'utf8');
-          res.end(JSON.stringify({ success: true, alerts: JSON.parse(content || '[]') }));
+          const alertsList = JSON.parse(content || '[]');
+          res.end(JSON.stringify({ 
+            success: true, 
+            alerts: alertsList,
+            activeDeviceCount: Math.max(1, sseClients.length),
+            timestamp: Date.now() 
+          }));
           return;
         }
 
-        if (req.method === 'POST') {
+        if (req.method === 'POST' || req.method === 'PUT') {
           const body = await parseBody(req);
           let current: any[] = [];
           try {
@@ -232,24 +301,47 @@ function sharedSyncPlugin(): Plugin {
             current = [];
           }
 
+          const nowIso = new Date().toISOString();
+
           if (body.alert) {
-            const idx = current.findIndex((a: any) => a.id === body.alert.id);
+            const incoming = { 
+              ...body.alert, 
+              updatedAt: body.alert.updatedAt || nowIso 
+            };
+            const idx = current.findIndex((a: any) => a.id === incoming.id);
             if (idx >= 0) {
-              current[idx] = { ...current[idx], ...body.alert };
+              current[idx] = { ...current[idx], ...incoming };
             } else {
-              current.unshift(body.alert);
+              current.unshift(incoming);
             }
           } else if (Array.isArray(body.alerts)) {
             const map = new Map<string, any>();
             current.forEach((a: any) => map.set(a.id, a));
-            body.alerts.forEach((a: any) => map.set(a.id, a));
+            body.alerts.forEach((a: any) => {
+              if (a && a.id) {
+                map.set(a.id, { ...a, updatedAt: a.updatedAt || nowIso });
+              }
+            });
             current = Array.from(map.values()).sort((a, b) => 
-              new Date(b.issuedAt || 0).getTime() - new Date(a.issuedAt || 0).getTime()
+              new Date(b.updatedAt || b.issuedAt || 0).getTime() - new Date(a.updatedAt || a.issuedAt || 0).getTime()
             );
           }
 
           fs.writeFileSync(alertsFile, JSON.stringify(current, null, 2), 'utf8');
-          res.end(JSON.stringify({ success: true, alerts: current }));
+
+          // Broadcast instant update to ALL connected devices in real time
+          notifyAllSseClients('ALERT_SYNC', {
+            alerts: current,
+            action: 'UPSERT',
+            targetId: body.alert?.id,
+            updatedAt: nowIso
+          });
+
+          res.end(JSON.stringify({ 
+            success: true, 
+            alerts: current,
+            message: 'Alerta sincronizado com todos os dispositivos' 
+          }));
           return;
         }
 
@@ -265,6 +357,14 @@ function sharedSyncPlugin(): Plugin {
           if (id) {
             current = current.filter((a: any) => a.id !== id);
             fs.writeFileSync(alertsFile, JSON.stringify(current, null, 2), 'utf8');
+
+            // Broadcast deletion to ALL devices immediately
+            notifyAllSseClients('ALERT_SYNC', {
+              alerts: current,
+              action: 'DELETE',
+              deletedId: id,
+              timestamp: Date.now()
+            });
           }
           res.end(JSON.stringify({ success: true, alerts: current }));
           return;
@@ -273,6 +373,8 @@ function sharedSyncPlugin(): Plugin {
 
       // Shared Maneuvers Endpoint
       if (parsedUrl.pathname === '/api/shared/maneuvers') {
+        res.setHeader('Content-Type', 'application/json');
+
         if (req.method === 'GET') {
           const content = fs.readFileSync(maneuversFile, 'utf8');
           res.end(JSON.stringify({ success: true, maneuvers: JSON.parse(content || '[]') }));
@@ -305,6 +407,12 @@ function sharedSyncPlugin(): Plugin {
           }
 
           fs.writeFileSync(maneuversFile, JSON.stringify(current, null, 2), 'utf8');
+
+          notifyAllSseClients('MANEUVER_SYNC', {
+            maneuvers: current,
+            timestamp: Date.now()
+          });
+
           res.end(JSON.stringify({ success: true, maneuvers: current }));
           return;
         }
@@ -313,6 +421,7 @@ function sharedSyncPlugin(): Plugin {
       next();
     } catch (err: any) {
       res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ success: false, error: err.message }));
     }
   };
@@ -321,6 +430,18 @@ function sharedSyncPlugin(): Plugin {
     name: 'vite-plugin-shared-sync',
     configureServer(server) {
       server.middlewares.use(handleRoutes);
+      const timer = setInterval(() => {
+        if (sseClients.length === 0) return;
+        const pingData = `data: ${JSON.stringify({ type: 'PING', activeClients: sseClients.length, timestamp: Date.now() })}\n\n`;
+        for (let i = sseClients.length - 1; i >= 0; i--) {
+          try {
+            sseClients[i].write(pingData);
+          } catch {
+            sseClients.splice(i, 1);
+          }
+        }
+      }, 15000);
+      if (typeof timer.unref === 'function') timer.unref();
     },
     configurePreviewServer(server) {
       server.middlewares.use(handleRoutes);
@@ -387,11 +508,38 @@ function aistudioMediaPlugin(): Plugin {
 }
 // LINT.ThenChange(//depot/google3/java/com/google/alkali/boq/makersuite/applet_dev_service/templates/initializers/react_theme/vite.config.ts:aistudio_media_plugin)
 
+function pwaForcedUpdatePlugin(): Plugin {
+  const buildTimestamp = Date.now().toString();
+  return {
+    name: 'vite-plugin-pwa-forced-update',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url) {
+          if (req.url === '/sw.js' || req.url.startsWith('/sw.js?')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+          } else if (req.url.startsWith('/api/version')) {
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.end(JSON.stringify({
+              version: buildTimestamp,
+              timestamp: Date.now()
+            }));
+            return;
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig(() => {
   return {
     // Required by Electron file:// loading and Capacitor's local WebView.
     base: './',
-    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), vesselFinderPlugin(), sharedSyncPlugin()],
+    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), vesselFinderPlugin(), sharedSyncPlugin(), pwaForcedUpdatePlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

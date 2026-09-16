@@ -17,13 +17,36 @@ import {
   X, 
   Check, 
   Search,
-  Filter
+  Filter,
+  Radio,
+  Wifi,
+  WifiOff,
+  RefreshCw
 } from 'lucide-react';
 import { useMaritime } from '../context/MaritimeContext';
 import { MaritimeAlert, AlertCategory, AlertSeverity } from '../types/maritime';
 
 export const AlertsView: React.FC = () => {
-  const { alerts, addAlert, updateAlert, toggleAlertActive, deleteAlert } = useMaritime();
+  const { 
+    alerts, 
+    addAlert, 
+    updateAlert, 
+    toggleAlertActive, 
+    deleteAlert,
+    isOnline,
+    isRealtimeConnected,
+    activeSyncDevices,
+    lastSyncTime,
+    refreshAlertsNow
+  } = useMaritime();
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleManualSync = async () => {
+    setIsRefreshing(true);
+    await refreshAlertsNow();
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -298,6 +321,69 @@ export const AlertsView: React.FC = () => {
         >
           <Plus className="w-4 h-4 stroke-[3]" />
           <span>NOVO ALERTA OPERACIONAL</span>
+        </button>
+      </div>
+
+      {/* Multi-Device Real-Time Sync Status Banner */}
+      <div className={`p-3.5 rounded-xl border-2 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+        isOnline
+          ? isRealtimeConnected
+            ? 'bg-emerald-50/90 border-emerald-500 text-emerald-950 shadow-xs'
+            : 'bg-sky-50/90 border-sky-400 text-sky-950'
+          : 'bg-amber-50 border-amber-400 text-amber-950'
+      }`}>
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-lg border ${
+            isOnline
+              ? isRealtimeConnected
+                ? 'bg-emerald-600 text-white border-emerald-700'
+                : 'bg-sky-600 text-white border-sky-700'
+              : 'bg-amber-600 text-white border-amber-700'
+          }`}>
+            {isOnline ? (
+              isRealtimeConnected ? (
+                <Radio className="w-4 h-4 animate-pulse" />
+              ) : (
+                <Wifi className="w-4 h-4" />
+              )
+            ) : (
+              <WifiOff className="w-4 h-4" />
+            )}
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs sm:text-sm font-black tracking-tight">
+                {isOnline
+                  ? isRealtimeConnected
+                    ? 'Sincronização em Tempo Real Ativa (Multi-Dispositivos)'
+                    : 'Sincronização Online Ativa'
+                  : 'Modo Offline - Alertas Armazenados Localmente'}
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                isOnline
+                  ? isRealtimeConnected
+                    ? 'bg-emerald-200/80 text-emerald-900 border-emerald-400'
+                    : 'bg-sky-200/80 text-sky-900 border-sky-400'
+                  : 'bg-amber-200 text-amber-900 border-amber-400'
+              }`}>
+                {isOnline ? (isRealtimeConnected ? 'Ao Vivo (Push SSE)' : 'Conectado') : 'Offline'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {isOnline
+                ? `Qualquer alerta criado, editado ou desativado é transmitido instantaneamente para todos os utilizadores (${activeSyncDevices} dispositivo${activeSyncDevices > 1 ? 's' : ''} sincronizado${activeSyncDevices > 1 ? 's' : ''}${lastSyncTime ? ` · Última sync: ${lastSyncTime}` : ''}).`
+                : 'Os alertas criados no dispositivo serão automaticamente transmitidos para os outros práticos quando a ligação retornar.'}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleManualSync}
+          disabled={isRefreshing}
+          className="self-end sm:self-center px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-slate-800 border-2 border-black font-bold text-xs flex items-center gap-1.5 shadow-xs transition-transform active:scale-95 shrink-0"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-700' : ''}`} />
+          <span>{isRefreshing ? 'Sincronizando...' : 'Sincronizar Agora'}</span>
         </button>
       </div>
 

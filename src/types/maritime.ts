@@ -186,13 +186,39 @@ export interface ManeuverRecord {
   masterName?: string;
   pilotageCertificateSigned?: boolean;
   
-  // Foto que vira PDF anexado
+  // Foto que vira PDF anexado (compatibilidade legada)
   photoUrl?: string; // Base64 or ObjectURL of photo
   photoTimestamp?: string;
   photoTitle?: string;
+
+  // Centro de Anexos Ampliado (Multi-anexos: fotos, bilhetes, calados, relatórios e PDFs)
+  attachments?: ManeuverAttachment[];
   
   createdAt: string;
   updatedAt: string;
+}
+
+export type AttachmentCategory = 
+  | 'photo_vessel'       // Foto do Navio / Costado / Proa / Popa
+  | 'photo_maneuver'     // Manobra / Atracação / Rebocadores
+  | 'pilot_slip'         // Bilhete de Praticagem Assinado / Certificado
+  | 'draft_survey'       // Folha de Calados / Leituras de Calado
+  | 'berth_condition'    // Condição do Berço / Defensas / Cabeços
+  | 'checklist_doc'      // Checklist de Segurança / Passagem de Informações
+  | 'incident_report'    // Registo de Avaria / Ocorrência / Incidente
+  | 'weather_radar'      // Boletim Meteorológico / Radar / Carta Náutica
+  | 'other_doc';         // Outro Documento / Arquivo
+
+export interface ManeuverAttachment {
+  id: string;
+  name: string;
+  category: AttachmentCategory;
+  dataUrl: string; // Base64 de imagem ou documento
+  fileType: 'image' | 'pdf' | 'document';
+  mimeType: string;
+  sizeBytes?: number;
+  uploadedAt: string;
+  caption?: string; // Legenda ou anotação do prático
 }
 
 export type PilotRank = 
@@ -260,7 +286,9 @@ export interface MaritimeAlert {
   isActive: boolean; // acionamento (ativar/desativar)
   issuedBy: string; // e.g. "Capitania dos Portos", "VTS Porto", "Coordenação de Pilotagem"
   issuedAt: string; // ISO datetime
+  updatedAt?: string; // ISO datetime para sincronização exata entre dispositivos
   validUntil?: string; // ISO datetime or date
   actionRequired?: string;
+  syncDeviceId?: string;
 }
 

@@ -231,48 +231,115 @@ export async function generatePilotageManeuverPDF(
   doc.text(`Piloto: ${record.pilotName}`, margin + 10, currentY + 16);
   doc.text('Comandante do Navio (Master)', margin + 110, currentY + 16);
 
-  // --- SEÇÃO 6: ANEXO FOTOGRÁFICO (Se houver foto anexada) ---
-  if (record.photoUrl) {
-    doc.addPage();
-    let photoY = 16;
+  // --- SEÇÃO 6: ANEXOS OPERACIONAIS (FOTOGRAFIAS, BILHETES, CALADOS E DOCUMENTOS) ---
+  const attachments = record.attachments && record.attachments.length > 0
+    ? record.attachments
+    : (record.photoUrl ? [{
+        id: 'legacy-photo',
+        name: record.photoTitle || 'Foto Oficial da Manobra',
+        category: 'pilot_slip' as const,
+        dataUrl: record.photoUrl,
+        fileType: 'image' as const,
+        mimeType: 'image/jpeg',
+        uploadedAt: record.createdAt,
+        caption: record.photoTitle
+      }] : []);
 
-    doc.setFillColor(...NAVAL_BLUE);
-    doc.rect(margin, photoY, contentWidth, 18, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('ANEXO FOTOGRÁFICO OFICIAL / PHOTO ATTACHMENT', margin + 6, photoY + 8);
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Navio: ${v.name} | Registo: ${record.id} | Anexo convertido automaticamente`, margin + 6, photoY + 14);
+  if (attachments.length > 0) {
+    attachments.forEach((att, attIdx) => {
+      doc.addPage();
+      let photoY = 16;
 
-    photoY += 24;
+      const categoryLabels: Record<string, string> = {
+        pilot_slip: 'BILHETE DE PRATICAGEM ASSINADO (SLIP / TIMESHEET)',
+        draft_survey: 'FOLHA DE CALADOS (DRAFT SURVEY / LEITURAS)',
+        photo_vessel: 'FOTOGRAFIA DO NAVIO (COSTADO / PROA / POPA / ESCADA)',
+        photo_maneuver: 'MANOBRA EM CURSO (REBOCADORES / ATRACAÇÃO)',
+        berth_condition: 'CONDIÇÕES DO BERÇO (DEFENSAS / CABEÇOS / CAIS)',
+        checklist_doc: 'CHECKLIST DE SEGURANÇA / TROCA DE INFORMAÇÕES (MPX)',
+        incident_report: 'REGISTO DE AVARIA / OCORRÊNCIA / INCIDENTE',
+        weather_radar: 'BOLETIM METEOROLÓGICO / CARTA NÁUTICA / RADAR',
+        other_doc: 'DOCUMENTO / ANEXO OPERACIONAL'
+      };
 
-    try {
-      // Adicionar a imagem ajustada à página
-      const imgWidth = contentWidth;
-      const imgHeight = 150; // altura máxima harmônica
-      doc.setDrawColor(...BORDER_GRAY);
-      doc.rect(margin, photoY, imgWidth, imgHeight);
-      doc.addImage(record.photoUrl, 'JPEG', margin + 1, photoY + 1, imgWidth - 2, imgHeight - 2, undefined, 'FAST');
+      const catLabel = categoryLabels[att.category] || 'ANEXO OFICIAL DE PRATICAGEM';
 
-      photoY += imgHeight + 8;
-      doc.setTextColor(75, 85, 99);
-      doc.setFontSize(9);
+      // Header Banner da Página de Anexo
+      doc.setFillColor(...NAVAL_BLUE);
+      doc.rect(margin, photoY, contentWidth, 20, 'F');
+      doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.text('LEGENDA DO ANEXO FOTOGRÁFICO:', margin, photoY);
+      doc.setFontSize(11);
+      doc.text(`ANEXO #${attIdx + 1}: ${catLabel}`, margin + 6, photoY + 8);
+      doc.setFontSize(8.5);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        record.photoTitle ||
-          `Registo fotográfico de confirmação operacional (Comprovante / Ticket de Manobra / Amarras / Escada de Piloto) para o navio ${v.name}.`,
-        margin,
-        photoY + 5
+        `Navio: ${v.name} | Registo: ${record.id} | Ficheiro: ${att.name}`,
+        margin + 6,
+        photoY + 15
       );
-    } catch (e) {
-      console.warn('Erro ao embutir imagem no PDF:', e);
-      doc.setTextColor(220, 38, 38);
-      doc.text('Registo fotográfico anexado no sistema.', margin, photoY + 10);
-    }
+
+      photoY += 26;
+
+      if (att.fileType === 'image') {
+        try {
+          const imgWidth = contentWidth;
+          const imgHeight = 150; // altura máxima
+          doc.setDrawColor(...BORDER_GRAY);
+          doc.rect(margin, photoY, imgWidth, imgHeight);
+          doc.addImage(att.dataUrl, 'JPEG', margin + 1, photoY + 1, imgWidth - 2, imgHeight - 2, undefined, 'FAST');
+
+          photoY += imgHeight + 8;
+          doc.setTextColor(75, 85, 99);
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'bold');
+          doc.text('LEGENDA E OBSERVAÇÕES DO ANEXO:', margin, photoY);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.text(
+            att.caption ||
+              `Comprovante fotográfico anexado digitalmente à folha oficial de manobra pelo Prático ${record.pilotName}.`,
+            margin,
+            photoY + 5,
+            { maxWidth: contentWidth }
+          );
+        } catch (e) {
+          console.warn('Erro ao embutir imagem no PDF:', e);
+          doc.setTextColor(220, 38, 38);
+          doc.setFontSize(9);
+          doc.text(`[Fotografia anexada digitalmente no sistema - Ficheiro: ${att.name}]`, margin, photoY + 10);
+        }
+      } else {
+        // Documento PDF / Documento Técnico
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(...BORDER_GRAY);
+        doc.roundedRect(margin, photoY, contentWidth, 80, 3, 3, 'FD');
+
+        doc.setTextColor(...NAVAL_BLUE);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.text('DOCUMENTO PDF ANEXADO AO REGISTO', margin + 10, photoY + 20);
+
+        doc.setTextColor(30, 41, 59);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.text(`Nome do Ficheiro: ${att.name}`, margin + 10, photoY + 32);
+        doc.text(`Categoria: ${catLabel}`, margin + 10, photoY + 40);
+        if (att.uploadedAt) {
+          doc.text(`Data de Registo: ${new Date(att.uploadedAt).toLocaleString('pt-PT')}`, margin + 10, photoY + 48);
+        }
+        if (att.caption) {
+          doc.text(`Anotações: ${att.caption}`, margin + 10, photoY + 56, { maxWidth: contentWidth - 20 });
+        }
+        doc.setTextColor(100, 116, 139);
+        doc.setFontSize(8.5);
+        doc.text(
+          'O documento original encontra-se preservado no sistema do Piloto para consulta e auditoria.',
+          margin + 10,
+          photoY + 70
+        );
+      }
+    });
   }
 
   const fileName = `Manobra_${record.vesselSnapshot.name.replace(/[^a-zA-Z0-9]/g, '_')}_${record.id}.pdf`;
